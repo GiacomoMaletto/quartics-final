@@ -67,18 +67,22 @@ function iscellcomplex(cc::CellComplex)::Bool
     return true
 end
 
-function istwosided(cc::CellComplex)::Bool
-    if !iscellcomplex(cc)
-        return false
-    end
+# function istwosided(cc::CellComplex)::Bool
+#     if !iscellcomplex(cc)
+#         return false
+#     end
 
-    for e in eachindex(cc.E)
-        if !(count(f -> e in getproperty.(f, :e), cc.F) == 2)
-            return false
-        end
-    end
+#     for e in eachindex(cc.E)
+#         if !(count(f -> e in getproperty.(f, :e), cc.F) == 2)
+#             return false
+#         end
+#     end
 
-    return true
+#     return true
+# end
+
+function twosides(cc::CellComplex)
+    return [findall(f -> e in getproperty.(f, :e), cc.F) for e in eachindex(cc.E)]
 end
 
 # ChatGPT-generated
@@ -103,14 +107,18 @@ function dyck_sequence(D::Vector{Bool}, start_label)
     return out
 end
 
-function f_ground_sequence(ndf::NDF)::Vector{Vector{Int}}
+function f_ground_sequence(Ds::Vector{Vector{Bool}})::Vector{Vector{Int}}
     i = 1
     fgs = []
-    for D in ndf.D
+    for D in Ds
         push!(fgs, dyck_sequence(D, i))
         i += div(length(fgs[end]), 2) + 1
     end
     return fgs
+end
+
+function f_ground_sequence(ndf::NDF)::Vector{Vector{Int}}
+    return f_ground_sequence(ndf.D)
 end
 
 function reversebool(A, b::Bool)
@@ -155,7 +163,7 @@ function dyck_mabel(word, start_label)
 end
 
 # ChatGPT-generated
-function mabel_dyck(labels)
+function mabel_dyck(labels)::Vector{Bool}
     seen = Set{Int}()
     dyck = Vector{Int}(undef, length(labels))
 
@@ -188,15 +196,29 @@ function remabel(v)
     return out
 end
 
-function f_mabel(ndf::NDF)::Vector{Vector{Int}}
+function f_mabel(Ds::Vector{Vector{Bool}})::Vector{Vector{Int}}
     i = 1
     fgs = []
-    for D in ndf.D
+    for D in Ds
         push!(fgs, dyck_mabel(D, i))
         i += div(length(fgs[end]), 2) + 1 # i += div(length(fgs[end]), 2)
     end
     return fgs
 end
+
+function f_mabel(ndf::NDF)::Vector{Vector{Int}}
+    return f_mabel(ndf.D)
+end
+
+# function f_mabel(ndf::NDF)
+#     i = 1
+#     fgs = []
+#     for D in ndf.D
+#         push!(fgs, dyck_mabel(D, i))
+#         i += div(length(fgs[end]), 2) + 1 # i += div(length(fgs[end]), 2)
+#     end
+#     return fgs
+# end
 
 function fe_mabel(ndf::NDF)::Dict{Tuple{Int,Int},Vector{Int}}
     fm = f_mabel(ndf)
@@ -303,7 +325,7 @@ end
 # compute the groundmatrix of a ndf over a two-sided cellular complex
 function groundmatrix(ndf)
     cc = ndf.cc
-    istwosided(cc) || error("Not two-sided!")
+    all(==(2), length.(twosides(cc))) || error("Not two-sided!")
     fgs = f_ground_sequence(ndf)
     ng = length(unique(vcat(fgs...)))
     gmat = zeros(Int, ng, ng)
@@ -342,8 +364,9 @@ function floatingforest(ndf)
 
     vss = []
     for (g, F) in ndf.F
-        push!(vss, [g, nv(graph) + 1])
-        graph = union2(graph, dyck_to_rooted_tree(F))
+        rt, root = dyck_to_rooted_tree(F)
+        push!(vss, [g, nv(graph) + root])
+        graph = union2(graph, rt)
     end
 
     graph, _ = merge_vertices_list(graph, vss)
@@ -352,7 +375,7 @@ end
 
 # compute the regionmatrix of a ndf over a two-sided cellular complex
 function regionmatrix(ndf)
-    istwosided(ndf.cc) || error("Not two-sided!")
+    all(==(2), length.twosides(cc)) || error("Not two-sided!")
     grmatrix = groundmatrix(ndf)
     ng = size(grmatrix, 1)
     flforest = floatingforest(ndf)
@@ -441,9 +464,71 @@ function isNDF(ndf::NDF)::Bool
     return true
 end
 
-# removes a curve
-function remove_curve(ndf::NDF, t::Int, ncc::CellComplex, fmap)::NDF
+# ndf = marge
+# fmap = [[(1, 1, 0), (3, 4, 1), (3, 6, 1), (1, 3, 0)], [(2, 1, 0), (4, 4, 1), (4, 3, 1), (2, 6, 0)]]
+# emap = ([1, 3], [[1, 3, 3, 1], [2, 4, 4, 2]])
 
+# nT = [1, 3]
+# nE = [1, 3, 4, 6]
+# nB = [[1, 3, 3, 1], [2, 4, 4, 2]]
+function remove_edges(ndf::NDF, ncc::CellComplex, nT::Vector{Int}, nE::Vector{Int}, nB::Vector{Vector{Int}})::NDF
+    fs = twosides(ndf.cc)
+    all(==(2), length.(fs)) || error("Not two-sided!")
+
+    fem = fe_mabel(ndf)
+    fegs = fe_ground_sequence(ndf)
+
+    unified_mabel = Dict([(l, l) for l in vcat(f_mabel(ndf)...)])
+    for e in findall(E -> !(E.t in nT), ndf.cc.E)
+        for (l1, l2) in zip(fem[(fs[e][1], e)], fem[(fs[e][2], e)])
+            unified_mabel[l2] = l1
+        end
+    end
+
+    a = []
+    b = []
+    for nf in eachindex(ncc.F)
+        push!(a, [])
+        push!(b, [])
+        for (f, (ne, s)) in zip(nB[nf], ncc.F[nf])
+            e = nE[ne]
+            append!(a[end], [unified_mabel[l] for l in reversebool(fem[(f, e)], s)])
+            append!(b[end], reversebool(fegs[(f, e)], s))
+        end
+    end
+    nD = mabel_dyck.(remabel.(a))
+
+    println(b)
+    println(f_ground_sequence(nD))
+
+    # used_mabel = unique(sort(vcat(a...)))
+    # unused_mabel = setdiff(values(unified_mabel), used_mabel)
+    # used_ground = used_mabel .+ 1
+    # unused_ground = unused_mabel .+ 1
+    unused_old_mabel = setdiff(values(unified_mabel), vcat(a...))
+    unused_old_ground = unused_old_mabel .+ 1
+
+    # println(a)
+    # println(f_mabel(nD))
+
+    nt = length(ndf.cc.T) + 1
+    gmat = groundmatrix(ndf)
+    flforest = floatingforest(ndf)
+    for ug in unused_ground
+        for un in findall(==(nt), gmat[ug, :])
+            add_edge!(flforest, ug, un)
+        end
+    end
+    nF = []
+    for g in used_ground
+        D = rooted_tree_to_dyck(flforest, g)
+        if !isempty(D)
+            push!(nF, (g=g, F=D))
+        end
+    end
+
+
+    return NDF(ncc, ndf.d, ndf.n[nE], nD, nF)
 end
 
 
@@ -453,12 +538,22 @@ three_lines = CellComplex(
     [(2, 3, 1), (3, 1, 2), (1, 2, 3), (2, 3, 1), (3, 1, 2), (1, 2, 3)],
     [[(1, 0), (2, 0), (3, 0)], [(1, 0), (5, 0), (6, 0)], [(4, 0), (2, 0), (6, 0)], [(4, 0), (5, 0), (3, 0)]])
 
+two_lines_three_points = CellComplex(
+    [1, 1],
+    3,
+    [(2, 3, 1), (1, 2, 2), (2, 3, 1), (1, 2, 2)],
+    [[(1, 0), (3, 1), (4, 1), (2, 0)], [(1, 0), (3, 1), (2, 1), (4, 0)]])
+
+three_two_lines_emap = ([1, 3], [[1, 3, 3, 1], [2, 4, 4, 2]])
+
 two_lines = CellComplex(
     [1, 1],
     1,
     [(1, 1, 1), (1, 1, 2)],
     [[(1, 0), (2, 0)], [(1, 0), (2, 1)]]
 )
+
+two_lines_vmap = [2]
 
 one_line = CellComplex(
     [1],
@@ -514,7 +609,7 @@ end
 @testset "forest" begin
     @test dyck_to_forest(Bool[1, 0, 1, 1, 0, 0]) == [[], [[]]]
     @test dyck_to_forest(Bool[1, 1, 0, 0, 1, 0]) == [[], [[]]]
-    @test forest_to_dyck(Any[[], [[]]]) == Bool[1, 0, 1, 1, 0, 0]
+    @test forest_to_dyck(Any[Any[], Any[Any[]]]) == Bool[1, 0, 1, 1, 0, 0]
     @test forest_to_dyck([]) == Bool[]
 end
 

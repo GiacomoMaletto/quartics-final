@@ -107,6 +107,29 @@ function dyck_sequence(D::Vector{Bool}, start_label)
     return out
 end
 
+function sequence_dyck(seq::AbstractVector{<:Integer})
+    m = length(seq)
+    m >= 1 || throw(ArgumentError("borseq must be nonempty"))
+    # borseq[1] == 1 || throw(ArgumentError("first label must be 1"))
+
+    # quick type-correct output
+    # dyck = Vector{Bool}(undef, max(0, m - 1))
+    dyck = Bool[]
+
+    # Step 1: infer bits by comparing consecutive borseq
+    for i in 1:m-1
+        a, b = seq[i], seq[i+1]
+        if b == a
+            throw(ArgumentError("invalid transition: two consecutive equal regions")) # continue
+        end
+        push!(dyck, b > a)
+    end
+
+    # @assert(dyck_sequence(dyck, seq[1]) == seq)
+
+    return dyck
+end
+
 function f_ground_sequence(Ds::Vector{Vector{Bool}})::Vector{Vector{Int}}
     i = 1
     fgs = []
@@ -464,6 +487,10 @@ function isNDF(ndf::NDF)::Bool
     return true
 end
 
+function remove_consecutive(v)
+    return [v[1]; v[2:end][v[2:end].!=v[1:end-1]]]
+end
+
 # ndf = marge
 # fmap = [[(1, 1, 0), (3, 4, 1), (3, 6, 1), (1, 3, 0)], [(2, 1, 0), (4, 4, 1), (4, 3, 1), (2, 6, 0)]]
 # emap = ([1, 3], [[1, 3, 3, 1], [2, 4, 4, 2]])
@@ -475,38 +502,48 @@ function remove_edges(ndf::NDF, ncc::CellComplex, nT::Vector{Int}, nE::Vector{In
     fs = twosides(ndf.cc)
     all(==(2), length.(fs)) || error("Not two-sided!")
 
-    fem = fe_mabel(ndf)
+    # fem = fe_mabel(ndf)
     fegs = fe_ground_sequence(ndf)
 
-    unified_mabel = Dict([(l, l) for l in vcat(f_mabel(ndf)...)])
+    # println(unique(vcat(f_ground_sequence(ndf)...)))
+
+    vss = []
+    # unified_mabel = Dict([(l, l) for l in vcat(f_mabel(ndf)...)])
+    unified_grounds = Dict([(l, l) for l in vcat(f_ground_sequence(ndf)...)])
     for e in findall(E -> !(E.t in nT), ndf.cc.E)
-        for (l1, l2) in zip(fem[(fs[e][1], e)], fem[(fs[e][2], e)])
-            unified_mabel[l2] = l1
+        for (l1, l2) in zip(fegs[(fs[e][1], e)], fegs[(fs[e][2], e)])
+            unified_grounds[l2] = l1
+            push!(vss, [l1, l2])
         end
     end
 
-    a = []
-    b = []
+    # a = []
+    b = Vector{Int}[]
     for nf in eachindex(ncc.F)
-        push!(a, [])
+        # push!(a, [])
         push!(b, [])
         for (f, (ne, s)) in zip(nB[nf], ncc.F[nf])
             e = nE[ne]
-            append!(a[end], [unified_mabel[l] for l in reversebool(fem[(f, e)], s)])
-            append!(b[end], reversebool(fegs[(f, e)], s))
+            # append!(a[end], [unified_mabel[l] for l in reversebool(fem[(f, e)], s)])
+            append!(b[end], [unified_grounds[l] for l in reversebool(fegs[(f, e)], s)])
         end
     end
-    nD = mabel_dyck.(remabel.(a))
+    b = remove_consecutive.(b)
+    nD = sequence_dyck.(b)
 
-    println(b)
-    println(f_ground_sequence(nD))
+
+    catb = vcat(b...)
+    catnb = vcat(f_ground_sequence(nD)...)
+    gmap = Dict(zip(catnb, catb))
+
+    unused_ground = setdiff(values(unified_grounds), catb)
 
     # used_mabel = unique(sort(vcat(a...)))
     # unused_mabel = setdiff(values(unified_mabel), used_mabel)
     # used_ground = used_mabel .+ 1
     # unused_ground = unused_mabel .+ 1
-    unused_old_mabel = setdiff(values(unified_mabel), vcat(a...))
-    unused_old_ground = unused_old_mabel .+ 1
+    # unused_old_mabel = setdiff(values(unified_mabel), vcat(a...))
+    # unused_old_ground = unused_old_mabel .+ 1
 
     # println(a)
     # println(f_mabel(nD))
@@ -519,11 +556,14 @@ function remove_edges(ndf::NDF, ncc::CellComplex, nT::Vector{Int}, nE::Vector{In
             add_edge!(flforest, ug, un)
         end
     end
+
+    flforest, vmap = merge_vertices_list(flforest, vss)
+
     nF = []
-    for g in used_ground
-        D = rooted_tree_to_dyck(flforest, g)
+    for (ng, og) in gmap
+        D = rooted_tree_to_dyck(flforest, vmap[og])
         if !isempty(D)
-            push!(nF, (g=g, F=D))
+            push!(nF, (g=ng, F=D))
         end
     end
 
@@ -588,7 +628,7 @@ marge = NDF(
     0,
     [4, 7, 3, 2, 1, 3],
     [[1, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 0], [1, 1, 1, 0, 1, 0, 0, 0], [1, 1, 0, 1, 1, 1, 0, 0, 1, 0, 0, 0], [1, 0, 1, 1, 0, 0]],
-    [(1, [1, 0]), (5, [1, 0]), (17, [1, 0])]
+    [(1, [1, 0]), (5, [1, 0]), (17, [1, 0]), (18, [1, 0])]
 )
 
 @testset "CellComplex" begin

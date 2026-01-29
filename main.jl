@@ -169,6 +169,21 @@ function fe_ground_sequence(ndf::NDF)::Dict{Tuple{Int,Int},Vector{Int}}
     return fegs
 end
 
+function fi_ground_sequence(ndf::NDF)::Dict{Tuple{Int,Int},Vector{Int}}
+    fgs = f_ground_sequence(ndf)
+
+    figs = Dict()
+    for (f, F) in enumerate(ndf.cc.F)
+        i = 1
+        for (j, (e, s)) in enumerate(F)
+            figs[(f, j)] = reversebool(fgs[f][i:(i+ndf.n[e])], s)
+            i += ndf.n[e]
+        end
+    end
+
+    return figs
+end
+
 # ChatGPT-generated
 function dyck_mabel(word, start_label)
     labels = Int[]
@@ -353,39 +368,71 @@ function merge_vertices_list(g, vss)
 end
 
 # compute the groundmatrix of a ndf over a two-sided cellular complex
-function groundmatrix(ndf)
+function groundmatrix(ndf)::Vector{Matrix{Bool}}
     cc = ndf.cc
-    all(==(2), length.(edge_faces(cc))) || error("Not two-sided!")
+
     fgs = f_ground_sequence(ndf)
     ng = length(unique(vcat(fgs...)))
-    gmat = zeros(Int, ng, ng)
-    nt = length(cc.T) + 1
+    gmat = [zeros(Bool, ng, ng) for _ in 1:(length(cc.T)+1)]
+
     for seq in fgs
         for (g1, g2) in zip(seq[1:end-1], seq[2:end])
-            setindexsymmetric!(gmat, g1, g2, nt)
+            setindexsymmetric!(gmat[end], g1, g2, 1)
         end
     end
 
-    fes = fe_ground_sequence(ndf)
-
-    ef = [Tuple{Int,Bool}[] for _ in eachindex(cc.E)]
+    efis = [Tuple{Int,Int,Bool}[] for _ in eachindex(cc.E)]
     for (f, F) in enumerate(cc.F)
-        for (e, s) in F
-            push!(ef[e], (f, s))
+        for (i, (e, s)) in enumerate(F)
+            push!(efis[e], (f, i, s))
         end
     end
-    @assert(all(length.(ef) .== 2))
+    @assert(all(length.(efis) .== 2))
+
+    figs = fi_ground_sequence(ndf)
 
     for e in eachindex(ndf.n)
-        ((f1, s1), (f2, s2)) = ef[e]
-        s1 = reversebool(fes[(f1, e)], s1)
-        s2 = reversebool(fes[(f2, e)], s2)
-        for (g1, g2) in zip(s1, s2)
-            setindexsymmetric!(gmat, g1, g2, cc.E[e].t)
+        ((f1, i1, s1), (f2, i2, s2)) = efis[e]
+        seq1 = reversebool(figs[(f1, i1)], s1)
+        seq2 = reversebool(figs[(f2, i2)], s2)
+        for (g1, g2) in zip(seq1, seq2)
+            setindexsymmetric!(gmat[cc.E[e].t], g1, g2, 1)
         end
     end
 
     return gmat
+
+    # all(==(2), length.(edge_faces(cc))) || error("Not two-sided!")
+    # fgs = f_ground_sequence(ndf)
+    # ng = length(unique(vcat(fgs...)))
+    # gmat = zeros(Int, ng, ng)
+    # nt = length(cc.T) + 1
+    # for seq in fgs
+    #     for (g1, g2) in zip(seq[1:end-1], seq[2:end])
+    #         setindexsymmetric!(gmat, g1, g2, nt)
+    #     end
+    # end
+
+    # fes = fe_ground_sequence(ndf)
+
+    # ef = [Tuple{Int,Bool}[] for _ in eachindex(cc.E)]
+    # for (f, F) in enumerate(cc.F)
+    #     for (e, s) in F
+    #         push!(ef[e], (f, s))
+    #     end
+    # end
+    # @assert(all(length.(ef) .== 2))
+
+    # for e in eachindex(ndf.n)
+    #     ((f1, s1), (f2, s2)) = ef[e]
+    #     s1 = reversebool(fes[(f1, e)], s1)
+    #     s2 = reversebool(fes[(f2, e)], s2)
+    #     for (g1, g2) in zip(s1, s2)
+    #         setindexsymmetric!(gmat, g1, g2, cc.E[e].t)
+    #     end
+    # end
+
+    # return gmat
 end
 
 function floatingforest(ndf)
@@ -525,18 +572,33 @@ function remove_edges(in_ndf::NDF, out_cc::CellComplex, Tmap::Vector{Int}, Emap:
 
     in_fegs = fe_ground_sequence(in_ndf)
 
-    unified_grounds = Dict([(g, g) for g in vcat(f_ground_sequence(in_ndf)...)])
-    for e in findall(E -> !(E.t in Tmap), in_cc.E)
-        for (g1, g2) in zip(in_fegs[(fs[e][1], e)], in_fegs[(fs[e][2], e)])
-            unified_grounds[g2] = g1
+    gmat = groundmatrix(in_ndf)
+
+    removed_t = setdiff(eachindex(in_cc.T), Tmap)
+    removed_matrix = reduce((m1, m2) -> m1 .|| m2, gmat[removed_t])
+    removed_components = connected_components(SimpleGraph(removed_matrix))
+    removed_map = Dict{Int,Int}()
+    for (i, c) in enumerate(removed_components)
+        for g in c
+            removed_map[g] = i
         end
     end
+
+    # unified_grounds = Dict([(g, g) for g in vcat(f_ground_sequence(in_ndf)...)])
+    # for e in findall(E -> !(E.t in Tmap), in_cc.E)
+    #     for (g1, g2) in zip(in_fegs[(fs[e][1], e)], in_fegs[(fs[e][2], e)])
+    #         unified_grounds[g2] = g1
+    #     end
+    # end
+
+    # println(f_ground_sequence(in_ndf))
+    # println(unified_grounds)
 
     merged_fgs = Vector{Int}[]
     for (f, F) in enumerate(out_cc.F)
         push!(merged_fgs, [])
         for (in_f, (e, s)) in zip(Fmap[f], F)
-            append!(merged_fgs[end], [unified_grounds[g] for g in reversebool(in_fegs[(in_f, Emap[e])], s)])
+            append!(merged_fgs[end], [removed_map[g] for g in reversebool(in_fegs[(in_f, Emap[e])], s)])
         end
     end
     merged_fgs = remove_consecutive.(merged_fgs)
@@ -546,19 +608,27 @@ function remove_edges(in_ndf::NDF, out_cc::CellComplex, Tmap::Vector{Int}, Emap:
     out_gs = vcat(f_ground_sequence(out_D)...)
     gmap = Dict(zip(out_gs, merged_gs))
 
-    unused_ground = setdiff(values(unified_grounds), merged_gs)
-    gmat = groundmatrix(in_ndf)
+    unused_ground = [g for g in 1:size(gmat[1], 1) if !(removed_map[g] in merged_gs)]
+
+    # println(removed_map)
+    # println(size(gmat[1], 1))
+    # println(removed_components)
+    # println(merged_gs)
+    # println(unused_ground)
+
+    # setdiff(values(unified_grounds), merged_gs)
+    # gmat = groundmatrix(in_ndf)
     flforest = floatingforest(in_ndf)
     for ug in unused_ground
-        for neigh in findall(==(maximum(gmat)), gmat[ug, :])
+        for neigh in findall(gmat[end][ug, :])
             add_edge!(flforest, ug, neigh)
         end
     end
-    flforest, vmap = merge_vertices_list(flforest, [[g, ug] for (g, ug) in unified_grounds])
+    flforest, vmap = merge_vertices_list(flforest, removed_components)
 
     out_F = []
-    for (ng, og) in gmap
-        D = rooted_tree_to_dyck(flforest, vmap[og])
+    for (ng, mg) in gmap
+        D = rooted_tree_to_dyck(flforest, vmap[removed_components[mg][1]])
         if !isempty(D)
             push!(out_F, (g=ng, F=D))
         end
@@ -568,7 +638,7 @@ function remove_edges(in_ndf::NDF, out_cc::CellComplex, Tmap::Vector{Int}, Emap:
 end
 
 # removes vertices, provided they are used by either 0 or 2 edges
-function remove_vertices(in_ndf::NDF, out_cc::CellComplex, Vmap::Vector{Int}, Emap::Vector{Vector{@NamedTuple{e::Int, s::Bool}}})
+function remove_vertices(in_ndf::NDF, out_cc::CellComplex, Vmap::Vector{Int}, Emap::Vector{Vector{Int}})
     in_cc = in_ndf.cc
 
     (length(out_cc.nV) == length(Vmap) == length(unique(Vmap))) || error("Not a subset of the vertices.")
@@ -579,19 +649,19 @@ function remove_vertices(in_ndf::NDF, out_cc::CellComplex, Vmap::Vector{Int}, Em
 
     (in_cc.T == out_cc.T) || error("Not the same number of types.")
 
-    (length(Emap) == length(out_cc.E)) || error("Not enough elements in Emap.")
-    for in_es in Emap
-        for ((e1, s1), (e2, s2)) in zip(in_es[1:end-1], in_es[2:end])
-            if destination(in_cc.E[e1], s1) != source(in_cc.E[e2], s2) || in_cc.E[e1].t != in_cc.E[e2].t
-                error("Edges in Emap not agreeing.")
-            end
-            if destination(in_cc.E[e1], s1) in Vmap
-                error("Merging two edges whose common vertex hasn't been removed.")
-            end
-        end
-    end
+    # (length(Emap) == length(out_cc.E)) || error("Not enough elements in Emap.")
+    # for in_es in Emap
+    #     for ((e1, s1), (e2, s2)) in zip(in_es[1:end-1], in_es[2:end])
+    #         if destination(in_cc.E[e1], s1) != source(in_cc.E[e2], s2) || in_cc.E[e1].t != in_cc.E[e2].t
+    #             error("Edges in Emap not agreeing.")
+    #         end
+    #         if destination(in_cc.E[e1], s1) in Vmap
+    #             error("Merging two edges whose common vertex hasn't been removed.")
+    #         end
+    #     end
+    # end
 
-    out_E = [sum(in_ndf.n[getproperty.(Emap[e], :e)]) for e in eachindex(out_cc.E)]
+    out_E = [sum(in_ndf.n[Emap[e]]) for e in eachindex(out_cc.E)]
 
     return NDF(out_cc, in_ndf.d, out_E, in_ndf.D, in_ndf.F)
 end
@@ -608,8 +678,6 @@ two_lines_three_points = CellComplex(
     [(2, 3, 1), (1, 2, 2), (2, 3, 1), (1, 2, 2)],
     [[(1, 0), (3, 1), (4, 1), (2, 0)], [(1, 0), (3, 1), (2, 1), (4, 0)]])
 
-three_two_lines_emap = ([1, 3], [[1, 3, 3, 1], [2, 4, 4, 2]])
-
 two_lines = CellComplex(
     [1, 1],
     1,
@@ -617,13 +685,11 @@ two_lines = CellComplex(
     [[(1, 0), (2, 0)], [(1, 0), (2, 1)]]
 )
 
-two_lines_vmap = [2]
-
 one_line = CellComplex(
     [1],
     1,
     [(1, 1, 1)],
-    [[(1, 0)]]
+    [[(1, 0), (1, 0)]]
 )
 
 zero_lines = CellComplex(
@@ -711,6 +777,22 @@ end
         [(1, [1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 0, 0])]
     )
 
+    marge_ev = NDF(
+        two_lines,
+        0,
+        [6, 6],
+        [[1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 0], [1, 1, 1, 0, 1, 0, 1, 1, 0, 0, 0, 0]],
+        [(1, [1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 0, 0])]
+    )
+
+    marge_eve = NDF(
+        one_line,
+        0,
+        [6],
+        [[1, 0, 1, 1, 0, 0, 1, 0, 1, 0, 1, 0]],
+        [(1, [1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 0, 0])]
+    )
+
     fine_e = NDF(
         two_lines_three_points,
         4,
@@ -720,5 +802,8 @@ end
     )
 
     @test remove_edges(marge, two_lines_three_points, [1, 3], [1, 3, 4, 6], [[1, 3, 3, 1], [2, 4, 4, 2]]) == marge_e
+    @test remove_vertices(marge_e, two_lines, [2], [[1, 3], [4, 2]]) == marge_ev
+    @test remove_edges(marge_ev, one_line, [2], [2], [[2, 1]]) == marge_eve
+
     @test remove_edges(fine, two_lines_three_points, [1, 3], [1, 3, 4, 6], [[1, 3, 3, 1], [2, 4, 4, 2]]) == fine_e
 end

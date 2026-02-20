@@ -43,62 +43,6 @@ function sequence_dyck(seq::AbstractVector{<:Integer})
     return dyck
 end
 
-# # ChatGPT-generated
-# function dyck_mabel(word, start_label)
-#     labels = Int[]
-#     stack = Int[]
-#     next_label = start_label
-
-#     for x in word
-#         if x == 1 || x === true
-#             push!(stack, next_label)
-#             push!(labels, next_label)
-#             next_label += 1
-#         else
-#             isempty(stack) && error("Invalid Dyck word: too many closes")
-#             id = pop!(stack)
-#             push!(labels, id)
-#         end
-#     end
-
-#     isempty(stack) || error("Invalid Dyck word: unclosed opens")
-#     return labels
-# end
-
-# # ChatGPT-generated
-# function mabel_dyck(labels)::Vector{Bool}
-#     seen = Set{Int}()
-#     dyck = Vector{Int}(undef, length(labels))
-
-#     for (i, x) in pairs(labels)
-#         if x ∈ seen
-#             dyck[i] = 0   # close
-#         else
-#             push!(seen, x)
-#             dyck[i] = 1   # open
-#         end
-#     end
-
-#     return dyck
-# end
-
-# # ChatGPT-generated
-# function remabel(v)
-#     mapping = Dict{Int,Int}()
-#     next_id = 0
-#     out = similar(v)
-
-#     for (i, x) in pairs(v)
-#         if !haskey(mapping, x)
-#             next_id += 1
-#             mapping[x] = next_id
-#         end
-#         out[i] = mapping[x]
-#     end
-
-#     return out
-# end
-
 # the root is always the first vertex
 # ChatGPT-generated, some alterations by me
 function dyck_to_rooted_tree(D::Vector{Bool})

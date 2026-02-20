@@ -77,24 +77,6 @@ function iscellcomplex(cc::CellComplex)::Bool
     return true
 end
 
-# function istwosided(cc::CellComplex)::Bool
-#     if !iscellcomplex(cc)
-#         return false
-#     end
-
-#     for e in eachindex(cc.E)
-#         if !(count(f -> e in getproperty.(f, :e), cc.F) == 2)
-#             return false
-#         end
-#     end
-
-#     return true
-# end
-
-# function edge_faces(cc::CellComplex)
-#     return [findall(f -> e in getproperty.(f, :e), cc.F) for e in eachindex(cc.E)]
-# end
-
 function f_ground_sequence(Ds::Vector{Vector{Bool}})::Vector{Vector{Int}}
     i = 1
     fgs = []
@@ -113,21 +95,6 @@ function reversebool(b::Bool, A)
     return b ? reverse(A) : A
 end
 
-# function fe_ground_sequence(nwt::NWT)::Dict{Tuple{Int,Int},Vector{Int}}
-#     fgs = f_ground_sequence(nwt)
-
-#     fegs = Dict()
-#     for (f, F) in enumerate(nwt.cc.F)
-#         i = 1
-#         for (s, e) in F
-#             fegs[(f, e)] = reversebool(s, fgs[f][i:(i+nwt.n[e])])
-#             i += nwt.n[e]
-#         end
-#     end
-
-#     return fegs
-# end
-
 # output: figs[(f, i)] returns the ground sequence at the i-th edge e of f,
 # with the same orientation as e
 function fi_ground_sequence(nwt::NWT)::Dict{Tuple{Int,Int},Vector{Int}}
@@ -144,45 +111,6 @@ function fi_ground_sequence(nwt::NWT)::Dict{Tuple{Int,Int},Vector{Int}}
 
     return figs
 end
-
-# function f_mabel(Ds::Vector{Vector{Bool}})::Vector{Vector{Int}}
-#     i = 1
-#     fgs = []
-#     for D in Ds
-#         push!(fgs, dyck_mabel(D, i))
-#         i += div(length(fgs[end]), 2) + 1 # i += div(length(fgs[end]), 2)
-#     end
-#     return fgs
-# end
-
-# function f_mabel(nwt::NWT)::Vector{Vector{Int}}
-#     return f_mabel(nwt.W)
-# end
-
-# function f_mabel(nwt::NWT)
-#     i = 1
-#     fgs = []
-#     for D in nwt.W
-#         push!(fgs, dyck_mabel(D, i))
-#         i += div(length(fgs[end]), 2) + 1 # i += div(length(fgs[end]), 2)
-#     end
-#     return fgs
-# end
-
-# function fe_mabel(nwt::NWT)::Dict{Tuple{Int,Int},Vector{Int}}
-#     fm = f_mabel(nwt)
-
-#     fem = Dict()
-#     for (f, F) in enumerate(nwt.cc.F)
-#         i = 1
-#         for (s, e) in F
-#             fem[(f, e)] = reversebool(s, fm[f][i:(i+nwt.n[e]-1)])
-#             i += nwt.n[e]
-#         end
-#     end
-
-#     return fem
-# end
 
 # compute the groundmatrix of a nwt
 function groundmatrix(nwt)::Vector{Matrix{Bool}}
@@ -232,15 +160,6 @@ function floatingforest(nwt)
     graph, _ = my_merge_vertices_list(graph, vss)
     return graph
 end
-
-# function curvematrix(nwt)
-#     grmatrix = groundmatrix(nwt)
-#     ng = size(grmatrix[1], 1)
-#     flforest = floatingforest(nwt)
-#     rmatrix = adjacency_matrix(flforest)
-#     rmatrix[1:ng, 1:ng] += grmatrix[end]
-#     return rmatrix
-# end
 
 function isNWT(nwt::NWT)::Bool
     cc = nwt.cc
@@ -439,8 +358,6 @@ marge = NWT(
     @test iscellcomplex(two_lines)
     @test iscellcomplex(one_line)
     @test iscellcomplex(zero_lines)
-
-    # @test forget_curve(three_lines, 2) == CellComplex([1, 1], )
 end
 
 @testset "isNWT" begin

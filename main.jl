@@ -9,6 +9,19 @@ include("my_graphs.jl")
     S[j, i] = v
 end
 
+@inline function remove_consecutive(v)
+    return [v[1]; v[2:end][v[2:end].!=v[1:end-1]]]
+end
+
+@inline function reversebool(b::Bool, A)
+    return b ? reverse(A) : A
+end
+
+@inline function product1d(x...)
+    rect = Iterators.product(x...)
+    return reshape(collect(rect), length(rect))
+end
+
 # Combinatorial cellular complex
 # d: vector indicating the degree of each curve (0 if it's just a curve)
 # nV: number of vertices
@@ -22,23 +35,7 @@ struct CellComplex
 end
 
 Base.:(==)(cc1::CellComplex, cc2::CellComplex) = cc1.d == cc2.d && cc1.nV == cc2.nV && cc1.E == cc2.E && cc1.F == cc2.F
-Base.hash(cc::CellComplex) = hash([cc.d, cc.nV, cc.E, cc.F])
-
-# Combinatorial arrangement
-# (n, W, T) data of a curve D of degree d intersecting transversely the cellular complex cc
-# n[e]: the number of intersections of C with the edge e
-# W[f]: the Dyck word of the face f
-# T: vector of tuples (g, T) where T is a rooted tree through a Dyck word, with ground g
-struct NWT
-    cc::CellComplex
-    d::Int
-    n::Vector{Int}
-    W::Vector{Vector{Bool}}
-    T::Vector{@NamedTuple{g::Int, T::Vector{Bool}}}
-end
-
-Base.:(==)(nwt1::NWT, nwt2::NWT) = nwt1.cc == nwt2.cc && nwt1.d == nwt2.d && nwt1.n == nwt2.n && nwt1.W == nwt2.W && nwt1.T == nwt2.T
-Base.hash(nwt::NWT) = hash([nwt.cc, nwt.d, nwt.n, nwt.W, nwt.T])
+Base.hash(cc::CellComplex) = hash((cc.d, cc.nV, cc.E, cc.F))
 
 function source(e)
     return e.s
@@ -77,22 +74,34 @@ function iscellcomplex(cc::CellComplex)::Bool
     return true
 end
 
-function f_ground_sequence(Ds::Vector{Vector{Bool}})::Vector{Vector{Int}}
+# Combinatorial arrangement
+# (n, W, T) data of a curve D of degree d intersecting transversely the cellular complex cc
+# n[e]: the number of intersections of C with the edge e
+# W[f]: the Dyck word of the face f
+# T: vector of tuples (g, T) where T is a rooted tree through a Dyck word, with ground g
+struct NWT
+    cc::CellComplex
+    d::Int
+    n::Vector{Int}
+    W::Vector{Vector{Bool}}
+    T::Vector{@NamedTuple{g::Int, T::Vector{Bool}}}
+end
+
+Base.:(==)(nwt1::NWT, nwt2::NWT) = nwt1.cc == nwt2.cc && nwt1.d == nwt2.d && nwt1.n == nwt2.n && nwt1.W == nwt2.W && nwt1.T == nwt2.T
+Base.hash(nwt::NWT) = hash((nwt.cc, nwt.d, nwt.n, nwt.W, nwt.T))
+
+function f_ground_sequence(Ws::Vector{Vector{Bool}})::Vector{Vector{Int}}
     i = 1
     fgs = []
-    for D in Ds
-        push!(fgs, dyck_sequence(D, i))
-        i += div(length(fgs[end]), 2) + 1
+    for W in Ws
+        push!(fgs, dyck_sequence(W, i))
+        i += div(length(W), 2) + 1
     end
     return fgs
 end
 
-function f_ground_sequence(nwt::NWT)::Vector{Vector{Int}}
+@inline function f_ground_sequence(nwt::NWT)::Vector{Vector{Int}}
     return f_ground_sequence(nwt.W)
-end
-
-function reversebool(b::Bool, A)
-    return b ? reverse(A) : A
 end
 
 # output: figs[(f, i)] returns the ground sequence at the i-th edge e of f,
@@ -205,10 +214,6 @@ function isNWT(nwt::NWT)::Bool
     return true
 end
 
-function remove_consecutive(v)
-    return [v[1]; v[2:end][v[2:end].!=v[1:end-1]]]
-end
-
 # input:
 # - in_nwt: the input nwt, where in_cc = in_nwt.cc
 # - out_cc: cc of the output; must have the same vertices, a subset of the edges, and the merged faces
@@ -282,6 +287,13 @@ function forget_edges(in_nwt::NWT, out_cc::CellComplex, Imap::Vector{Int}, Emap:
     return NWT(out_cc, in_nwt.d, in_nwt.n[Emap], out_D, out_T)
 end
 
+# input:
+# - in_nwt: the input nwt, where in_cc = in_nwt.cc
+# - out_cc: cc of the output; must have the a subset of the vertices, the merged edges, and the same faces
+# - Vmap: vertex v in out_cc is vertex Vmap[v] in in_cc
+# - Emap: edge e in out_cc is made by merging edges Emap[e] in in_cc
+# output:
+# - out_nwt: obtained by removing some vertices from in_nwt
 function forget_vertices(in_nwt::NWT, out_cc::CellComplex, Vmap::Vector{Int}, Emap::Vector{Vector{Int}})
     in_cc = in_nwt.cc
 
@@ -297,6 +309,140 @@ function forget_vertices(in_nwt::NWT, out_cc::CellComplex, Vmap::Vector{Int}, Em
 
     return NWT(out_cc, in_nwt.d, out_E, in_nwt.W, in_nwt.T)
 end
+
+# the ground faces are indexed as in the indexing used in nwt.T
+function groundcc(in_nwt::NWT)::CellComplex
+    in_cc = in_nwt.cc
+
+    outd = [in_cc.d; in_nwt.d]
+
+    outnV = in_cc.nV
+    outE = @NamedTuple{s::Int, d::Int, i::Int}[]
+    ine_oute = Vector{Int}[]
+    for (ine, inE) in enumerate(in_cc.E)
+        ine_outV = [inE.s; (outnV+1):(outnV+in_nwt.n[ine]); inE.d]
+        outnV += in_nwt.n[ine]
+
+        push!(ine_oute, [])
+        for (v1, v2) in zip(ine_outV[1:end-1], ine_outV[2:end])
+            push!(outE, (v1, v2, inE.i))
+            push!(ine_oute[ine], length(outE))
+        end
+    end
+
+    outF = Vector{@NamedTuple{s::Bool, e::Int}}[]
+    for (inf, inF) in enumerate(in_cc.F)
+        B = Vector{@NamedTuple{s::Bool, e::Int}}[[]]
+        for (ins, ine) in inF
+            push!(B[end], (ins, ine_oute[ine][1]))
+            for oute in ine_oute[ine][2:end]
+                push!(B, [(ins, oute)])
+            end
+        end
+        pushfirst!(B[1], pop!(B)[1])
+
+        W = in_nwt.W[inf]
+        @assert(length(B) == length(W))
+        mabel = dyck_mabel(W, length(outE) + 1)
+        for m in unique(mabel)
+            (i, j) = findall(==(m), mabel)
+            push!(outE, (outE[B[i][end].e].d, outE[B[j][end].e].d, length(outd)))
+        end
+
+        start = collect(eachindex(W))
+        while !isempty(start)
+            push!(outF, [])
+            level = 0
+            walker = start[1]
+            while walker <= length(W)
+                if level == 0
+                    setdiff!(start, walker)
+                    append!(outF[end], B[walker])
+                    push!(outF[end], (!W[walker], mabel[walker]))
+                    if !W[walker]
+                        break
+                    end
+                end
+                level += W[walker] ? 1 : (-1)
+                walker += 1
+            end
+        end
+    end
+
+    return CellComplex(outd, outnV, outE, outF)
+end
+
+# Let cc be the cellular complex on which nwt is based;
+# Suppose cc is the projective plane and iline is the index of a line C_iline on cc;
+# then curve_type(nwt, iline) is the topological type of the curve nwt
+function curve_type(nwt::NWT, iline::Int)::Vector{Bool}
+
+end
+
+# Generate all NWT with specified cc, d, n and no trees
+function allW(cc::CellComplex, d::Int, n::Vector{Int})
+    fn = [sum(n[getproperty(F, :e)]) for F in cc.F]
+    (fn .% 2 .== 0) || error("Does not add up to an even number.")
+
+    for W in product1d(all_dyck_words.(fn))
+        push!(result, NWT(cc, d, n, W, []))
+    end
+    return result
+end
+
+# given a CellComplex cc and a closed fpath fp,
+# returns the possible new arrangements
+function add_line(incc::CellComplex, fp::Vector{Int})::Vector{NWT}
+    result = []
+    # assume fp = [f1, ..., fk, f1]
+    # then edgepaths is a vector whose elements are tuples (e12, e23, ..., ek1)
+    # where ei{i+1} is an edge between fi and f{i+1}
+    inFe = [getproperty.(F, :e) for F in eachindex(incc.F)]
+
+    for epath in product1d([intersect(inFe[f1], inFe[f2]) for (f1, f2) in zip(fp[1:end-1], fp[2:end])]...)
+        n = [0 for _ in incc.E]
+        for e in epath
+            n[e] += 1
+        end
+        for nwt in allW(incc, 1, n)
+            if curve_type(nwt) == []
+                push!(result, nwt)
+            end
+        end
+    end
+
+    return result
+
+    #     # newV are the labels of the vertices of the new arrangement
+    #     # and can be either the original vertices 1, ..., nv
+    #     # or new vertices (e, i) where e is the edge over which the new vertex lie
+    #     # and i is an increasing index;
+    #     # newEV keeps track of the indices of the new vertices lying over the old edges,
+    #     # so that newEV[e] = [i1, ..., ik] and newV[ij] = (e, j)
+    #     newV = Vector{Union{Int,Tuple{Int,Int}}}(collect(1:incc.nV))
+    #     newEV = [Int[] for _ in eachindex(cc.E)]
+    #     for (e, k) in counter(epath)
+    #         push!(newEV[e], ((length(newV)+1):(length(newV)+k))...)
+    #         push!(newV, [(e, i) for i in 1:k]...)
+    #     end
+
+    #     # in this way, we get
+    #     # path2     =   [f1,  f2,  f3, ..., f{k-1}, fk]
+    #     # edgepath2 = [ek1, e12, e23, ...,   e{k-1}k, ek1]
+    #     path2 = fp[1:end-1]
+    #     epath2 = [epath[end], epath...]
+
+    #     vmatchings = [Vector{Tuple{Int,Int}}[] for _ in eachindex(incc.F)]
+    #     for (f, F) in enumerate(incc.F)
+    #         p = [sort((epath2[i], epath2[i+1])) for i in findall(==(f), path2)]
+    #         vs = [reversebool(s, newEV[e]) for (s, e) in F]
+    #         vmatchings[f] = generate_matchings(inFe[f], p, vs)
+    #     end
+    # end
+
+end
+
+### TESTS ###
 
 three_lines = CellComplex(
     [1, 1, 1],
@@ -364,38 +510,6 @@ end
     @test isNWT(fine)
     @test isNWT(nonviro)
     @test isNWT(marge)
-end
-
-@testset "forest" begin
-    @test dyck_to_forest(Bool[1, 0, 1, 1, 0, 0]) == [[], [[]]]
-    @test dyck_to_forest(Bool[1, 1, 0, 0, 1, 0]) == [[], [[]]]
-    @test forest_to_dyck(Any[Any[], Any[Any[]]]) == Bool[1, 0, 1, 1, 0, 0]
-    @test forest_to_dyck([]) == Bool[]
-end
-
-@testset "merge" begin
-    g = SimpleGraph(Edge.([
-        (1, 3), (1, 10),
-        (2, 3),
-        (3, 5), (3, 6), (3, 9),
-        (4, 8), (4, 10),
-        (5, 10),
-        (6, 10),
-        (7, 10),
-        (8, 9)
-    ]))
-
-    gprime, vmap = my_merge_vertices_list(g, [[9, 4], [5, 3, 7]])
-
-    @test gprime == SimpleGraph(Edge.([
-        (1, 3), (1, 7),
-        (2, 3),
-        (3, 4), (3, 5), (3, 7),
-        (4, 6), (4, 7),
-        (5, 7)
-    ]))
-
-    @test vmap == [1, 2, 3, 4, 3, 5, 3, 6, 4, 7]
 end
 
 @testset "remove_edges" begin

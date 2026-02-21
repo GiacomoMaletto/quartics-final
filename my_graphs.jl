@@ -1,4 +1,5 @@
 using Graphs
+using Test
 
 function my_union(g::SimpleGraph, h::SimpleGraph)
     return SimpleGraph(blockdiag(adjacency_matrix(g), adjacency_matrix(h)))
@@ -39,4 +40,32 @@ function my_merge_vertices_list(g::SimpleGraph, vss::Vector{Vector{Int}})
     end
 
     return g, vmap_final
+end
+
+
+### TESTS ###
+
+@testset "merge" begin
+    g = SimpleGraph(Edge.([
+        (1, 3), (1, 10),
+        (2, 3),
+        (3, 5), (3, 6), (3, 9),
+        (4, 8), (4, 10),
+        (5, 10),
+        (6, 10),
+        (7, 10),
+        (8, 9)
+    ]))
+
+    gprime, vmap = my_merge_vertices_list(g, [[9, 4], [5, 3, 7]])
+
+    @test gprime == SimpleGraph(Edge.([
+        (1, 3), (1, 7),
+        (2, 3),
+        (3, 4), (3, 5), (3, 7),
+        (4, 6), (4, 7),
+        (5, 7)
+    ]))
+
+    @test vmap == [1, 2, 3, 4, 3, 5, 3, 6, 4, 7]
 end

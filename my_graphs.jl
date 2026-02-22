@@ -5,28 +5,70 @@ function my_union(g::SimpleGraph, h::SimpleGraph)
     return SimpleGraph(blockdiag(adjacency_matrix(g), adjacency_matrix(h)))
 end
 
-# input: a graph g and a list of vertices vs
-# output: the graph gprime obtained by merging every vertex in vs to minimum(vs) and otherwise keeping the same order,
-# and a list vmap corresponding to the morphism from g to gprime
-function my_merge_vertices(g::SimpleGraph, vs::Vector{Int})
-    vs = unique(vs)
-    if length(vs) <= 1
-        return g, collect(vertices(g))
-    end
-    gprime = merge_vertices(g, vs)
-    vmap = Int[]
-    vs = sort(vs)
-    i = -1
-    for v in 1:nv(g)
-        if v in vs
-            push!(vmap, vs[1])
-            i += 1
+function my_merge_vertices(g::SimpleGraph, V::Vector{Int}; make_self_loop=true)
+    A = adjacency_matrix(g)
+    V = sort(unique(V))
+    n = size(A, 1)
+
+    insert_pos = V[1]
+
+    # ---- Build vmap ----
+    vmap = similar(1:n)
+    new_n = n - length(V) + 1
+
+    new_idx = 1
+    for i in 1:n
+        if i in V
+            vmap[i] = insert_pos
         else
-            push!(vmap, v - max(0, i))
+            if new_idx == insert_pos
+                new_idx += 1
+            end
+            vmap[i] = new_idx
+            new_idx += 1
         end
     end
-    return gprime, vmap
+
+    # ---- Build projection matrix P ----
+    P = falses(n, new_n)
+    for i in 1:n
+        P[i, vmap[i]] = true
+    end
+
+    # ---- Boolean contraction ----
+    C = (P' * A * P) .> 0   # Boolean semiring via integer lifting
+
+    # ---- Self-loop control ----
+    if !make_self_loop
+        C[insert_pos, insert_pos] = false
+    end
+
+    return SimpleGraph(C), vmap
 end
+
+# # input: a graph g and a list of vertices vs
+# # output: the graph gprime obtained by merging every vertex in vs to minimum(vs) and otherwise keeping the same order,
+# # and a list vmap corresponding to the morphism from g to gprime
+# # the merge of two connected edges gives a loop
+# function my_merge_vertices(g::SimpleGraph, vs::Vector{Int})
+#     vs = unique(vs)
+#     if length(vs) <= 1
+#         return g, collect(vertices(g))
+#     end
+#     gprime = merge_vertices(g, vs)
+#     vmap = Int[]
+#     vs = sort(vs)
+#     i = -1
+#     for v in 1:nv(g)
+#         if v in vs
+#             push!(vmap, vs[1])
+#             i += 1
+#         else
+#             push!(vmap, v - max(0, i))
+#         end
+#     end
+#     return gprime, vmap
+# end
 
 # input: a graph g and a list of lists of vertices vs
 # output: the graph obtained by successively merging the vertices in vs[1], vs[2], ...
@@ -59,9 +101,17 @@ end
 
     gprime, vmap = my_merge_vertices_list(g, [[9, 4], [5, 3, 7]])
 
+    # @test gprime == SimpleGraph(Edge.([
+    #     (1, 3), (1, 7),
+    #     (2, 3),
+    #     (3, 4), (3, 5), (3, 7),
+    #     (4, 6), (4, 7),
+    #     (5, 7)
+    # ]))
+
     @test gprime == SimpleGraph(Edge.([
         (1, 3), (1, 7),
-        (2, 3),
+        (2, 3), (3, 3),
         (3, 4), (3, 5), (3, 7),
         (4, 6), (4, 7),
         (5, 7)

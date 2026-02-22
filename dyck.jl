@@ -209,7 +209,7 @@ function dyck_pairs(D)::Vector{Tuple{Int,Int}}
     return pairs
 end
 
-function all_dyck_words(n::Integer)::Vector{Bool}
+function all_dyck_words(n::Integer)::Vector{Vector{Bool}}
     L = 2n
     out = Vector{Vector{Bool}}()
     buf = Vector{Bool}(undef, L)            # reuse and copy when a word is complete

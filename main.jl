@@ -99,6 +99,8 @@ end
 Base.:(==)(nwt1::NWT, nwt2::NWT) = nwt1.cc == nwt2.cc && nwt1.n == nwt2.n && nwt1.W == nwt2.W && nwt1.T == nwt2.T
 Base.hash(nwt::NWT) = hash((nwt.cc, nwt.n, nwt.W, nwt.T))
 
+Base.show(io::IO, nwt::NWT) = print(io, (nwt.n, nwt.W, nwt.T))
+
 function emptyNWT(cc::CellComplex)::NWT
     return NWT(cc, [0 for _ in eachindex(cc.E)], [[] for _ in eachindex(cc.F)], [])
 end
@@ -362,7 +364,6 @@ function groundcc(in_nwt::NWT)::CellComplex
         end
         if isempty(W)
             push!(outF, only(B))
-            # println("outF: ", outF)
             continue
         end
         B[1] = [pop!(B); B[1]]
@@ -403,7 +404,7 @@ end
 function curve_type(nwt::NWT)::Tuple{Bool,Vector{Bool}}
     tm = totalmatrix(nwt)
 
-    vss = connected_components(SimpleGraph(max.(tm[2:end-1]...)))
+    vss = length(tm) > 2 ? connected_components(SimpleGraph(max.(tm[2:end-1]...))) : Vector{Int}[]
     lc_g, lc_vmap = my_merge_vertices_list(SimpleGraph(tm[end]), vss)
     l_g, l_vmap = my_merge_vertices_list(SimpleGraph(tm[1]), vss)
     @assert(lc_vmap == l_vmap)
@@ -487,10 +488,31 @@ function liftedgraph(tm::Vector{BitMatrix}, D)
     return lv, le
 end
 
+function is_bezout_basic(nwt::NWT, D::Vector{Int})
+    if D[end] == 0
+        return true
+    end
+    for (i, d) in enumerate(D[1:end-1])
+        if d != 0
+            es = findall(E -> E.i == i, nwt.cc.E)
+            n_t = sum(nwt.n[es])
+            if n_t > d * D[end] || (d * D[end] - n_t) % 2 != 0
+                return false
+            end
+        end
+    end
+
+    return true
+end
+
 function is_bezout_order_zero(nwt::NWT, D::Vector{Int})
+    if !is_bezout_basic(nwt, D)
+        return false
+    end
+
     tm = totalmatrix(nwt)
     N = size(tm[1], 1)
-    dps = distinct_pairs(axes(tm, 1))
+    dps = distinct_pairs(axes(tm[1], 1))
 
     lv, le = liftedgraph(tm, D)
     lg = SimpleDiGraph(le)
@@ -524,18 +546,14 @@ function is_bezout_order_zero(nwt::NWT, D::Vector{Int})
     return true
 end
 
-function is_bezout_order_n(cc::CellComplex, D::Vector{Int}, n::Int)
-    if n == 0
-        return is_bezout_order_zero(emptyNWT(cc), D)
-    end
-
-    if !is_bezout_order_n(cc, D, n - 1)
+function is_bezout_order_one(cc::CellComplex, D::Vector{Int})
+    if !is_bezout_order_zero(emptyNWT(cc), D)
         return false
     end
 
     tm = totalmatrix(nwt)
     N = size(tm[1], 1)
-    dps = distinct_pairs(axes(tm, 1))
+    dps = distinct_pairs(axes(tm[1], 1))
 
     lv, le = liftedgraph(tm, D)
     lg = SimpleDiGraph(le)
@@ -573,6 +591,97 @@ function is_bezout_order_n(cc::CellComplex, D::Vector{Int}, n::Int)
     end
 
     return true
+end
+
+function nonneg_sum(N, n)
+    if n == 1
+        return [[N]]
+    end
+    result = Vector{Vector{Int}}()
+    for k in 0:N
+        for tail in nonneg_sum(N - k, n - 1)
+            push!(result, [k; tail])
+        end
+    end
+    return result
+end
+
+function all_n(cc::CellComplex, D::Vector{Int})::Vector{Vector{Int}}
+    result = []
+
+    ie = [Int[] for _ in 1:cc.k]
+    for (e, E) in enumerate(cc.E)
+        push!(ie[E.i], e)
+    end
+
+    for n_i in product1d([(d*D[end]):(-2):0 for d in D[1:end-1]]...)
+        for n_ie in product1d([nonneg_sum(n_i[i], length(ie[i])) for i in 1:cc.k]...)
+            n_e = [0 for _ in eachindex(cc.E)]
+            for i in 1:cc.k
+                for (e, n) in zip(ie[i], n_ie[i])
+                    n_e[e] = n
+                end
+            end
+            for (f, F) in enumerate(cc.F)
+                n_f = sum([n_e[e] for (s, e) in F])
+                if n_f % 2 != 0
+                    @goto next_n_ie
+                end
+            end
+            push!(result, n_e)
+
+            @label next_n_ie
+        end
+    end
+
+    return result
+end
+
+_d6(i, j) = (false, Bool[vcat([[1, 0] for _ in 1:i]...); 1; vcat([[1, 0] for _ in 1:j]...); 0])
+
+curve_type_list = Vector{Tuple{Bool,Vector{Bool}}}[
+    [(true, [])],
+    [(false, []), (false, [1, 0])],
+    [(true, []), (true, [1, 0])],
+    [
+        (false, []), (false, [1, 0]), (false, [1, 0, 1, 0]), (false, [1, 0, 1, 0, 1, 0]),
+        (false, [1, 0, 1, 0, 1, 0, 1, 0]), (false, [1, 1, 0, 0])
+    ],
+    [
+        (true, []), (true, [1, 0]), (true, [1, 0, 1, 0]), (true, [1, 1, 0, 0]), (true, [1, 0, 1, 0, 1, 0]),
+        (true, [1, 0, 1, 0, 1, 0, 1, 0]), (true, [1, 0, 1, 0, 1, 0, 1, 0, 1, 0]), (true, [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0])
+    ],
+    [
+        [_d6(o, 0) for o in 0:9]..., # <n>
+        [_d6(i, o - 1 - i) for o in 2:9 for i in 1:(o-1)]..., # <n ⊔ 1<m>>
+        _d6(10, 0), _d6(8, 1), _d6(5, 4), _d6(4, 5), _d6(1, 8), _d6(0, 9),
+        _d6(9, 1), _d6(5, 5), _d6(1, 9),
+        (false, [1, 1, 1, 0, 0, 0]),
+    ]
+]
+
+function all_bezout_zero(cc::CellComplex, D::Vector{Int})::Vector{NWT}
+    result = []
+    for n in all_n(cc, D)
+        n_f = [sum([n[e] for (s, e) in F]) for F in cc.F]
+        for W in product1d([all_dyck_words(div(n_f[f], 2)) for f in eachindex(cc.F)]...)
+            nwt0 = NWT(cc, n, [W...], [])
+
+            @assert(is_bezout_basic(nwt0, D))
+
+            if !(curve_type(nwt0) in curve_type_list[D[end]])
+                continue
+            end
+
+            if !(is_bezout_order_zero(nwt0, D))
+                continue
+            end
+
+            push!(result, nwt0)
+        end
+    end
+
+    return result
 end
 
 ### TESTS ###

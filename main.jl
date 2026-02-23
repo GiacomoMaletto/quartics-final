@@ -99,6 +99,10 @@ end
 Base.:(==)(nwt1::NWT, nwt2::NWT) = nwt1.cc == nwt2.cc && nwt1.n == nwt2.n && nwt1.W == nwt2.W && nwt1.T == nwt2.T
 Base.hash(nwt::NWT) = hash((nwt.cc, nwt.n, nwt.W, nwt.T))
 
+function emptyNWT(cc::CellComplex)::NWT
+    return NWT(cc, [0 for _ in eachindex(cc.E)], [[] for _ in eachindex(cc.F)], [])
+end
+
 function f_ground_sequence(Ws::Vector{Vector{Bool}})::Vector{Vector{Int}}
     i = 1
     fgs = []
@@ -131,7 +135,7 @@ function fi_ground_sequence(nwt::NWT)::Dict{Tuple{Int,Int},Vector{Int}}
 end
 
 # compute the groundmatrix of a nwt
-function groundmatrix(nwt)::Vector{Matrix{Bool}}
+function groundmatrix(nwt)::Vector{BitMatrix}
     cc = nwt.cc
 
     fgs = f_ground_sequence(nwt)
@@ -164,7 +168,7 @@ function groundmatrix(nwt)::Vector{Matrix{Bool}}
     return gmat
 end
 
-function floatingforest(nwt)
+function floatingforest(nwt)::SimpleGraph
     ng = length(unique(vcat(f_ground_sequence(nwt)...)))
     graph = SimpleGraph(ng)
 
@@ -179,27 +183,18 @@ function floatingforest(nwt)
     return graph
 end
 
-# function curvematrix(nwt)
-#     grmatrix = groundmatrix(nwt)
-#     ng = size(grmatrix[1], 1)
-#     flforest = floatingforest(nwt)
-#     cmatrix = adjacency_matrix(flforest)
-#     cmatrix[1:ng, 1:ng] += grmatrix[end]
-#     return cmatrix
-# end
-
-function totalmatrix(nwt::NWT)
+function totalmatrix(nwt::NWT)::Vector{BitMatrix}
     gm = groundmatrix(nwt)
     n = size(gm[1], 1)
 
-    flforest = floatingforest(nwt)
-    N = nv(flforest)
+    fm = adjacency_matrix(floatingforest(nwt))
+    N = size(fm, 1)
 
     tm = [falses(N, N) for _ in eachindex(gm)]
     for i in eachindex(gm)
         tm[i][1:n, 1:n] .= gm[i]
     end
-    tm[end] += adjacency_matrix(flforest)
+    tm[end] += fm
 
     return tm
 end
@@ -213,16 +208,6 @@ function isNWT(nwt::NWT)::Bool
     if length(nwt.n) != length(cc.E)
         return false
     end
-
-    # for (i, d) in enumerate(cc.d)
-    #     if d != 0 && nwt.d != 0
-    #         es = findall(E -> E.i == i, cc.E)
-    #         n_t = sum(nwt.n[es])
-    #         if n_t > d * nwt.d || (d * nwt.d - n_t) % 2 != 0
-    #             return false
-    #         end
-    #     end
-    # end
 
     for (f, F) in enumerate(cc.F)
         es = getproperty.(F, :e)
@@ -416,14 +401,6 @@ end
 # where b==true iff there is a pseudoline, and T is the rooted tree representing the regions of the curve,
 # where the root is the unique region whose interior of the closure is nonorientable
 function curve_type(nwt::NWT)::Tuple{Bool,Vector{Bool}}
-    # gm = groundmatrix(nwt)
-    # n = size(gm[1], 1)
-
-    # cm = curvematrix(nwt)
-    # N = size(cm, 1)
-
-    # lm = falses(N, N)
-    # lm[1:n, 1:n] += gm[1]
     tm = totalmatrix(nwt)
 
     vss = connected_components(SimpleGraph(max.(tm[2:end-1]...)))
@@ -444,117 +421,6 @@ function curve_type(nwt::NWT)::Tuple{Bool,Vector{Bool}}
         return (false, rooted_tree_to_dyck(c_g, only(unique(c_vmap[l_ext]))))
     end
 end
-
-
-# pseudoline_multable = [
-#     0 0 0 0 0 0 0 0 0;
-#     0 0 7 6 1 8 0 0 0;
-#     0 7 0 5 2 0 8 0 0;
-#     0 6 5 0 3 0 0 8 0;
-#     0 1 2 3 4 5 6 7 8;
-#     0 8 0 0 5 0 0 0 0;
-#     0 0 8 0 6 0 0 0 0;
-#     0 0 0 8 7 0 0 0 0;
-#     0 0 0 0 8 0 0 0 0
-# ]
-
-# pseudoline_weight = [0, 1, 1, 1, 0, 2, 2, 2, 3]
-
-# function pseudoline_mul!(u, v, w)
-#     n = size(v, 1)
-#     for i in 1:n, j in 1:n
-#         u[i, j] = maximum(pseudoline_multable[v[i, k]+1, w[k, j]+1] for k in 1:n)
-#     end
-#     return u
-# end
-
-# function pseudoline_min_path(u)
-#     mp = 100
-#     n = length(u)
-#     for i in 1:n, j in i+1:n
-#         if u[i] > 0 && u[j] > 0 && abs(u[i] - u[j]) == 4
-#             mp = min(mp, (i - 1) - pseudoline_weight[u[i]+1] + (j - 1) - pseudoline_weight[u[j]+1])
-#         end
-#     end
-#     return mp
-# end
-
-# @inline function linedistance_add(a::Vector{NTuple{k,Int}}, b::Vector{NTuple{k,Int}}) where k
-#     return unique!(vcat(a, b))
-# end
-
-# @inline function linedistance_mul(a::Vector{NTuple{k,Int}}, b::Vector{NTuple{k,Int}}) where k
-#     out = Vector{NTuple{k,Int}}()
-#     for x in a, y in b
-#         push!(out, ntuple(i -> x[i] + y[i], K))
-#     end
-#     return unique!(out)
-# end
-
-# @inline function linedistance_filter(D, a::Vector{NTuple{k,Int}})
-#     return [x for x in a if x <= D]
-# end
-
-# function linedistance_matmul(A::Matrix{Vector{NTuple{k,Int}}}, B::Matrix{Vector{NTuple{k,Int}}}, D::Vector{Int})::Matrix{Vector{NTuple{k,Int}}} where k
-#     D = tuple(D...)
-#     m, n = size(A)
-#     n2, p = size(B)
-#     @assert n == n2
-
-#     C = [Vector{NTuple{k,Int}}() for _ in 1:m, _ in 1:p]
-#     for i in 1:m, j in 1:p
-#         C[i, j] = [x for x in unique!(vcat([[[x .+ y for x in A[i, k], y in B[k, j]]...] for k in 1:n]...))
-#                    if all(x .<= D)]
-#     end
-#     return C
-# end
-
-# function linedistance_matrix(nwt::NWT, D::Vector{Int})
-#     tm = totalmatrix(nwt)
-#     k = length(tm)
-#     N = size(tm[1], 1)
-
-#     A = [Vector{NTuple{k,Int}}() for _ in 1:N, _ in 1:N]
-#     for i in 1:k
-#         for (j, v) in enumerate(tm[i])
-#             if v
-#                 push!(A[j], tuple(I[1:k, i]...))
-#             end
-#         end
-#     end
-
-#     B = deepcopy(A)
-#     powers = [Vector{NTuple{k,Int}}([tuple([0 for _ in 1:k]...); A[i, j]]) for i in 1:N, j in 1:N]
-#     for _ in 1:sum(D)
-#         B = linedistance_matmul(A, B, D)
-#         powers = unique!.(vcat.(powers, B))
-#     end
-
-#     for v in powers
-#         for (a, b) in distinct_pairs(v)
-#             c = a .+ b
-#             if all(c .<= D .&& (D .- c) .% 2 .== 0)
-#                 @goto ld_next
-#             end
-#         end
-#         return false
-#         @label ld_next
-#     end
-
-#     return true
-# end
-
-# Generate all NWT with specified cc, n and no trees
-# function allW(cc::CellComplex, n::Vector{Int})::Vector{NWT}
-#     result = NWT[]
-#     fn = [sum(n[getproperty.(F, :e)]) for F in cc.F]
-#     (all(fn .% 2 .== 0)) || error("Does not add up to an even number.")
-
-#     for W in product1d((all_dyck_words.(fn))...)
-#         push!(result, NWT(cc, n, [W...], []))
-#     end
-#     return result
-# end
 
 function add_line(incc::CellComplex, fp::Vector{Int})::Vector{NWT}
     result = []
@@ -590,40 +456,6 @@ function add_line(incc::CellComplex, fp::Vector{Int})::Vector{NWT}
 
     return result
 end
-
-# function face_graph(cc::CellComplex, D::Vector{Int})::Tuple{Vector{NTuple{cc.k + 1,Int}},Matrix{Int}}
-#     @assert(length(D) == cc.k)
-#     faceV = product1d(eachindex(cc.F), [0:d for d in D]...)
-#     faceE = zeros(Int, length(faceV), length(faceV))
-
-#     efs = [[] for _ in cc.E]
-#     for (f, F) in enumerate(cc.F)
-#         for (s, e) in F
-#             push!(efs[e], f)
-#         end
-#     end
-#     @assert(all(length.(efs) .== 2))
-
-#     for (e, (s, d, i)) in enumerate(cc.E)
-#         start_t = tuple([0 for d in D]...)
-#         delta_t = tuple(I[1:cc.k, i]...)
-#         end_t = tuple([d for d in D]...) .- delta_t
-
-#         (f1, f2) = efs[e]
-
-#         for t in product1d((start_t[i]:end_t[i] for i in 1:cc.k)...)
-#             if1 = findfirst(==(tuple(f1, t...)), faceV)
-#             if2 = findfirst(==(tuple(f2, (t .+ delta_t)...)), faceV)
-#             faceE[if1, if2] = 1
-
-#             if1 = findfirst(==(tuple(f2, t...)), faceV)
-#             if2 = findfirst(==(tuple(f1, (t .+ delta_t)...)), faceV)
-#             faceE[if1, if2] = 1
-#         end
-#     end
-
-#     return faceV, faceE
-# end
 
 @inline function liftedindex(N, D, n, d)
     acc = [1; accumulate(*, D .+ 1)[1:end-1]]
@@ -692,79 +524,6 @@ function is_bezout_order_zero(nwt::NWT, D::Vector{Int})
     return true
 end
 
-# function regiongraph(cc::CellComplex, T::Vector{@NamedTuple{g::Int, T::Vector{Bool}}}, D::Vector{Int})::Tuple{Vector{NTuple{cc.k + 1,Int}},Matrix{Int}}
-#     @assert(length(D) == cc.k)
-#     faceV = product1d(eachindex(cc.F), [0:d for d in D]...)
-#     faceE = zeros(Int, length(faceV), length(faceV))
-
-#     efs = [[] for _ in cc.E]
-#     for (f, F) in enumerate(cc.F)
-#         for (s, e) in F
-#             push!(efs[e], f)
-#         end
-#     end
-#     @assert(all(length.(efs) .== 2))
-
-#     for (e, (s, d, i)) in enumerate(cc.E)
-#         start_t = tuple([0 for d in D]...)
-#         delta_t = tuple(I[1:cc.k, i]...)
-#         end_t = tuple([d for d in D]...) .- delta_t
-
-#         (f1, f2) = efs[e]
-
-#         for t in product1d((start_t[i]:end_t[i] for i in 1:cc.k)...)
-#             if1 = findfirst(==(tuple(f1, t...)), faceV)
-#             if2 = findfirst(==(tuple(f2, (t .+ delta_t)...)), faceV)
-#             faceE[if1, if2] = 1
-
-#             if1 = findfirst(==(tuple(f2, t...)), faceV)
-#             if2 = findfirst(==(tuple(f1, (t .+ delta_t)...)), faceV)
-#             faceE[if1, if2] = 1
-#         end
-#     end
-
-#     return faceV, faceE
-# end
-
-# function is_bezout_order_zero(cc::CellComplex, D::Vector{Int})
-#     dps = distinct_pairs(eachindex(cc.F))
-
-#     faceV, faceE = face_graph(cc, D)
-#     faceG = SimpleDiGraph(faceE)
-#     fws = floyd_warshall_shortest_paths(faceG)
-#     ep = enumerate_paths(fws)
-
-#     while !isempty(dps)
-#         (f1, f2) = first(dps)
-#         start_f = findfirst(==(tuple(f1, [0 for d in D]...)), faceV)
-#         ends_f = [findfirst(==(tuple(f1, ds...)), faceV) for ds in product1d([collect(d:(-2):0) for d in D]...)]
-
-#         for middle_f in findall(i -> faceV[i][1] == f2 && fws.dists[start_f, i] < typemax(Int), eachindex(faceV))
-#             for end_f in ends_f
-#                 if fws.dists[middle_f, end_f] < typemax(Int)
-#                     path1 = ep[start_f][middle_f]
-#                     path2 = ep[middle_f][end_f]
-#                     path = [path1[1:end-1]; path2]
-
-#                     setdiff!(dps, [(faceV[f1][1], faceV[f2][1]) for (f1, f2) in distinct_pairs(path)])
-
-#                     @goto boz_ok
-#                 end
-#             end
-#         end
-
-#         return false
-
-#         @label boz_ok
-#     end
-
-#     return true
-# end
-
-function emptyNWT(cc::CellComplex)::NWT
-    return NWT(cc, [0 for _ in eachindex(cc.E)], [[] for _ in eachindex(cc.F)], [])
-end
-
 function is_bezout_order_n(cc::CellComplex, D::Vector{Int}, n::Int)
     if n == 0
         return is_bezout_order_zero(emptyNWT(cc), D)
@@ -815,50 +574,6 @@ function is_bezout_order_n(cc::CellComplex, D::Vector{Int}, n::Int)
 
     return true
 end
-
-# function is_bezout_order_one(cc::CellComplex, D::Vector{Int})
-#     if !is_bezout_order_zero(cc, D)
-#         return false
-#     end
-#     dps = distinct_pairs(eachindex(cc.F))
-
-#     faceV, faceE = face_graph(cc, D)
-#     faceG = SimpleDiGraph(faceE)
-#     ds = [dijkstra_shortest_paths(faceG, findfirst(==(tuple(f, [0 for d in D]...)), faceV), allpaths=true) for f in eachindex(cc.F)]
-
-#     while !isempty(dps)
-#         (f1, f2) = first(dps)
-
-#         start_f = findfirst(==((f1, [0 for d in D]...)), faceV)
-#         for middle_f in findall(i -> faceV[i][1] == f2 && ds[f1].dists[i] < typemax(Int), eachindex(faceV))
-#             for end_f in [findfirst(==(tuple(f1, ds...)), faceV) for ds in product1d([collect(d:(-2):m) for (d, m) in zip(D, faceV[middle_f][2:end])]...)]
-#                 end2_t = faceV[end_f][2:end] .- faceV[middle_f][2:end]
-#                 end2_f = findfirst(==(tuple(f1, end2_t...)), faceV)
-#                 if ds[f2].dists[end2_f] < typemax(Int)
-#                     start2_f = findfirst(==((f2, [0 for d in D]...)), faceV)
-#                     paths1 = all_shortest_paths(start_f, middle_f, ds[f1].predecessors)
-#                     paths2 = all_shortest_paths(start2_f, end2_f, ds[f2].predecessors)
-#                     paths = [first.(faceV[[path1[1:end-1]; path2]]) for (path1, path2) in Iterators.product(paths1, paths2)]
-
-#                     for path in paths
-#                         for refined_nwt in add_line(cc, path)
-#                             if is_bezout_order_zero(groundcc(refined_nwt), [D...; 1])
-#                                 setdiff!(dps, [(faceV[f1][1], faceV[f2][1]) for (f1, f2) in distinct_pairs(path)])
-#                                 @goto boo_ok
-#                             end
-#                         end
-#                     end
-#                 end
-#             end
-#         end
-
-#         return false
-
-#         @label boo_ok
-#     end
-
-#     return true
-# end
 
 ### TESTS ###
 

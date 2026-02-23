@@ -167,23 +167,6 @@ function mabel_dyck(labels)::Vector{Bool}
     return dyck
 end
 
-# ChatGPT-generated
-function remabel(v)
-    mapping = Dict{Int,Int}()
-    next_id = 0
-    out = similar(v)
-
-    for (i, x) in pairs(v)
-        if !haskey(mapping, x)
-            next_id += 1
-            mapping[x] = next_id
-        end
-        out[i] = mapping[x]
-    end
-
-    return out
-end
-
 function dyck_pairs(D)::Vector{Tuple{Int,Int}}
     stack = []  # To store the positions of unmatched open parentheses
     pairs = []  # To store the pairs of matching parentheses

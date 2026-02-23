@@ -1,5 +1,6 @@
 using Test
 using Graphs
+using LinearAlgebra: I
 
 include("dyck.jl")
 include("my_graphs.jl")
@@ -20,6 +21,10 @@ end
 @inline function product1d(x...)
     rect = Iterators.product(x...)
     return reshape(collect(rect), length(rect))
+end
+
+@inline function distinct_pairs(xs)
+    return [(xs[i], xs[j]) for i in eachindex(xs) for j in (i+1):length(xs)]
 end
 
 # Combinatorial cellular complex
@@ -174,13 +179,29 @@ function floatingforest(nwt)
     return graph
 end
 
-function curvematrix(nwt)
-    grmatrix = groundmatrix(nwt)
-    ng = size(grmatrix[1], 1)
+# function curvematrix(nwt)
+#     grmatrix = groundmatrix(nwt)
+#     ng = size(grmatrix[1], 1)
+#     flforest = floatingforest(nwt)
+#     cmatrix = adjacency_matrix(flforest)
+#     cmatrix[1:ng, 1:ng] += grmatrix[end]
+#     return cmatrix
+# end
+
+function totalmatrix(nwt::NWT)
+    gm = groundmatrix(nwt)
+    n = size(gm[1], 1)
+
     flforest = floatingforest(nwt)
-    cmatrix = adjacency_matrix(flforest)
-    cmatrix[1:ng, 1:ng] += grmatrix[end]
-    return cmatrix
+    N = nv(flforest)
+
+    tm = [falses(N, N) for _ in eachindex(gm)]
+    for i in eachindex(gm)
+        tm[i][1:n, 1:n] .= gm[i]
+    end
+    tm[end] += adjacency_matrix(flforest)
+
+    return tm
 end
 
 function isNWT(nwt::NWT)::Bool
@@ -345,17 +366,23 @@ function groundcc(in_nwt::NWT)::CellComplex
 
     outF = Vector{@NamedTuple{s::Bool, e::Int}}[]
     for (inf, inF) in enumerate(in_cc.F)
+        W = in_nwt.W[inf]
         B = Vector{@NamedTuple{s::Bool, e::Int}}[[]]
         for (ins, ine) in inF
-            push!(B[end], (ins, ine_oute[ine][1]))
-            for oute in ine_oute[ine][2:end]
+            outes = reversebool(ins, ine_oute[ine])
+            push!(B[end], (ins, outes[1]))
+            for oute in outes[2:end]
                 push!(B, [(ins, oute)])
             end
         end
-        pushfirst!(B[1], pop!(B)[1])
-
-        W = in_nwt.W[inf]
+        if isempty(W)
+            push!(outF, only(B))
+            # println("outF: ", outF)
+            continue
+        end
+        B[1] = [pop!(B); B[1]]
         @assert(length(B) == length(W))
+
         mabel = dyck_mabel(W, length(outE) + 1)
         for m in unique(mabel)
             (i, j) = findall(==(m), mabel)
@@ -389,18 +416,19 @@ end
 # where b==true iff there is a pseudoline, and T is the rooted tree representing the regions of the curve,
 # where the root is the unique region whose interior of the closure is nonorientable
 function curve_type(nwt::NWT)::Tuple{Bool,Vector{Bool}}
-    gm = groundmatrix(nwt)
-    n = size(gm[1], 1)
+    # gm = groundmatrix(nwt)
+    # n = size(gm[1], 1)
 
-    cm = curvematrix(nwt)
-    N = size(cm, 1)
+    # cm = curvematrix(nwt)
+    # N = size(cm, 1)
 
-    lm = falses(N, N)
-    lm[1:n, 1:n] += gm[1]
+    # lm = falses(N, N)
+    # lm[1:n, 1:n] += gm[1]
+    tm = totalmatrix(nwt)
 
-    vss = connected_components(SimpleGraph(max.(gm[2:end-1]...)))
-    lc_g, lc_vmap = my_merge_vertices_list(SimpleGraph(cm), vss)
-    l_g, l_vmap = my_merge_vertices_list(SimpleGraph(lm), vss)
+    vss = connected_components(SimpleGraph(max.(tm[2:end-1]...)))
+    lc_g, lc_vmap = my_merge_vertices_list(SimpleGraph(tm[end]), vss)
+    l_g, l_vmap = my_merge_vertices_list(SimpleGraph(tm[1]), vss)
     @assert(lc_vmap == l_vmap)
 
     c_g, c_vmap = my_merge_vertices_list(lc_g, connected_components(l_g))
@@ -417,7 +445,106 @@ function curve_type(nwt::NWT)::Tuple{Bool,Vector{Bool}}
     end
 end
 
-# # Generate all NWT with specified cc, n and no trees
+
+# pseudoline_multable = [
+#     0 0 0 0 0 0 0 0 0;
+#     0 0 7 6 1 8 0 0 0;
+#     0 7 0 5 2 0 8 0 0;
+#     0 6 5 0 3 0 0 8 0;
+#     0 1 2 3 4 5 6 7 8;
+#     0 8 0 0 5 0 0 0 0;
+#     0 0 8 0 6 0 0 0 0;
+#     0 0 0 8 7 0 0 0 0;
+#     0 0 0 0 8 0 0 0 0
+# ]
+
+# pseudoline_weight = [0, 1, 1, 1, 0, 2, 2, 2, 3]
+
+# function pseudoline_mul!(u, v, w)
+#     n = size(v, 1)
+#     for i in 1:n, j in 1:n
+#         u[i, j] = maximum(pseudoline_multable[v[i, k]+1, w[k, j]+1] for k in 1:n)
+#     end
+#     return u
+# end
+
+# function pseudoline_min_path(u)
+#     mp = 100
+#     n = length(u)
+#     for i in 1:n, j in i+1:n
+#         if u[i] > 0 && u[j] > 0 && abs(u[i] - u[j]) == 4
+#             mp = min(mp, (i - 1) - pseudoline_weight[u[i]+1] + (j - 1) - pseudoline_weight[u[j]+1])
+#         end
+#     end
+#     return mp
+# end
+
+# @inline function linedistance_add(a::Vector{NTuple{k,Int}}, b::Vector{NTuple{k,Int}}) where k
+#     return unique!(vcat(a, b))
+# end
+
+# @inline function linedistance_mul(a::Vector{NTuple{k,Int}}, b::Vector{NTuple{k,Int}}) where k
+#     out = Vector{NTuple{k,Int}}()
+#     for x in a, y in b
+#         push!(out, ntuple(i -> x[i] + y[i], K))
+#     end
+#     return unique!(out)
+# end
+
+# @inline function linedistance_filter(D, a::Vector{NTuple{k,Int}})
+#     return [x for x in a if x <= D]
+# end
+
+function linedistance_matmul(A::Matrix{Vector{NTuple{k,Int}}}, B::Matrix{Vector{NTuple{k,Int}}}, D::Vector{Int})::Matrix{Vector{NTuple{k,Int}}} where k
+    D = tuple(D...)
+    m, n = size(A)
+    n2, p = size(B)
+    @assert n == n2
+
+    C = [Vector{NTuple{k,Int}}() for _ in 1:m, _ in 1:p]
+    for i in 1:m, j in 1:p
+        C[i, j] = [x for x in unique!(vcat([[[x .+ y for x in A[i, k], y in B[k, j]]...] for k in 1:n]...))
+                   if all(x .<= D)]
+    end
+    return C
+end
+
+function linedistance_matrix(nwt::NWT, D::Vector{Int})
+    tm = totalmatrix(nwt)
+    k = length(tm)
+    N = size(tm[1], 1)
+
+    A = [Vector{NTuple{k,Int}}() for _ in 1:N, _ in 1:N]
+    for i in 1:k
+        for (j, v) in enumerate(tm[i])
+            if v
+                push!(A[j], tuple(I[1:k, i]...))
+            end
+        end
+    end
+
+    B = deepcopy(A)
+    powers = [Vector{NTuple{k,Int}}([tuple([0 for _ in 1:k]...); A[i, j]]) for i in 1:N, j in 1:N]
+    for _ in 1:sum(D)
+        B = linedistance_matmul(A, B, D)
+        powers = unique!.(vcat.(powers, B))
+    end
+
+    for v in powers
+        for (a, b) in distinct_pairs(v)
+            c = a .+ b
+            if all(c .<= D .&& (D .- c) .% 2 .== 0)
+                @goto ld_next
+            end
+        end
+        return false
+        @label ld_next
+    end
+
+    return true
+end
+
+# Generate all NWT with specified cc, n and no trees
 # function allW(cc::CellComplex, n::Vector{Int})::Vector{NWT}
 #     result = NWT[]
 #     fn = [sum(n[getproperty.(F, :e)]) for F in cc.F]
@@ -462,6 +589,119 @@ function add_line(incc::CellComplex, fp::Vector{Int})::Vector{NWT}
     end
 
     return result
+end
+
+function face_graph(cc::CellComplex, D::Vector{Int})::Tuple{Vector{NTuple{cc.k + 1,Int}},Matrix{Int}}
+    @assert(length(D) == cc.k)
+    faceV = product1d(eachindex(cc.F), [0:d for d in D]...)
+    faceE = zeros(Int, length(faceV), length(faceV))
+
+    efs = [[] for _ in cc.E]
+    for (f, F) in enumerate(cc.F)
+        for (s, e) in F
+            push!(efs[e], f)
+        end
+    end
+    @assert(all(length.(efs) .== 2))
+
+    for (e, (s, d, i)) in enumerate(cc.E)
+        start_t = tuple([0 for d in D]...)
+        delta_t = tuple(I[1:cc.k, i]...)
+        end_t = tuple([d for d in D]...) .- delta_t
+
+        (f1, f2) = efs[e]
+
+        for t in product1d((start_t[i]:end_t[i] for i in 1:cc.k)...)
+            if1 = findfirst(==(tuple(f1, t...)), faceV)
+            if2 = findfirst(==(tuple(f2, (t .+ delta_t)...)), faceV)
+            faceE[if1, if2] = 1
+
+            if1 = findfirst(==(tuple(f2, t...)), faceV)
+            if2 = findfirst(==(tuple(f1, (t .+ delta_t)...)), faceV)
+            faceE[if1, if2] = 1
+        end
+    end
+
+    return faceV, faceE
+end
+
+function is_bezout_order_zero(cc::CellComplex, D::Vector{Int})
+    dps = distinct_pairs(eachindex(cc.F))
+
+    faceV, faceE = face_graph(cc, D)
+    faceG = SimpleDiGraph(faceE)
+    fws = floyd_warshall_shortest_paths(faceG)
+    ep = enumerate_paths(fws)
+
+    while !isempty(dps)
+        (f1, f2) = first(dps)
+        start_f = findfirst(==(tuple(f1, [0 for d in D]...)), faceV)
+        ends_f = [findfirst(==(tuple(f1, ds...)), faceV) for ds in product1d([collect(d:(-2):0) for d in D]...)]
+
+        for middle_f in findall(i -> faceV[i][1] == f2 && fws.dists[start_f, i] < typemax(Int), eachindex(faceV))
+            for end_f in ends_f
+                if fws.dists[middle_f, end_f] < typemax(Int)
+                    path1 = ep[start_f][middle_f]
+                    path2 = ep[middle_f][end_f]
+                    path = [path1[1:end-1]; path2]
+
+                    setdiff!(dps, [(faceV[f1][1], faceV[f2][1]) for (f1, f2) in distinct_pairs(path)])
+
+                    @goto boz_ok
+                end
+            end
+        end
+
+        return false
+
+        @label boz_ok
+    end
+
+    return true
+end
+
+function is_bezout_order_one(cc::CellComplex, D::Vector{Int})
+    if !is_bezout_order_zero(cc, D)
+        return false
+    end
+    dps = distinct_pairs(eachindex(cc.F))
+
+    faceV, faceE = face_graph(cc, D)
+    faceG = SimpleDiGraph(faceE)
+    ds = [dijkstra_shortest_paths(faceG, findfirst(==(tuple(f, [0 for d in D]...)), faceV), allpaths=true) for f in eachindex(cc.F)]
+
+    while !isempty(dps)
+        (f1, f2) = first(dps)
+
+        start_f = findfirst(==((f1, [0 for d in D]...)), faceV)
+        for middle_f in findall(i -> faceV[i][1] == f2 && ds[f1].dists[i] < typemax(Int), eachindex(faceV))
+            for end_f in [findfirst(==(tuple(f1, ds...)), faceV) for ds in product1d([collect(d:(-2):m) for (d, m) in zip(D, faceV[middle_f][2:end])]...)]
+                end2_t = faceV[end_f][2:end] .- faceV[middle_f][2:end]
+                end2_f = findfirst(==(tuple(f1, end2_t...)), faceV)
+                if ds[f2].dists[end2_f] < typemax(Int)
+                    start2_f = findfirst(==((f2, [0 for d in D]...)), faceV)
+                    paths1 = all_shortest_paths(start_f, middle_f, ds[f1].predecessors)
+                    paths2 = all_shortest_paths(start2_f, end2_f, ds[f2].predecessors)
+                    paths = [first.(faceV[[path1[1:end-1]; path2]]) for (path1, path2) in Iterators.product(paths1, paths2)]
+
+                    for path in paths
+                        for refined_nwt in add_line(cc, path)
+                            if is_bezout_order_zero(groundcc(refined_nwt), [D...; 1])
+                                setdiff!(dps, [(faceV[f1][1], faceV[f2][1]) for (f1, f2) in distinct_pairs(path)])
+                                @goto boo_ok
+                            end
+                        end
+                    end
+                end
+            end
+        end
+
+        return false
+
+        @label boo_ok
+    end
+
+    return true
 end
 
 ### TESTS ###

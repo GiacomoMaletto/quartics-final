@@ -495,54 +495,54 @@ end
 #     return [x for x in a if x <= D]
 # end
 
-function linedistance_matmul(A::Matrix{Vector{NTuple{k,Int}}}, B::Matrix{Vector{NTuple{k,Int}}}, D::Vector{Int})::Matrix{Vector{NTuple{k,Int}}} where k
-    D = tuple(D...)
-    m, n = size(A)
-    n2, p = size(B)
-    @assert n == n2
+# function linedistance_matmul(A::Matrix{Vector{NTuple{k,Int}}}, B::Matrix{Vector{NTuple{k,Int}}}, D::Vector{Int})::Matrix{Vector{NTuple{k,Int}}} where k
+#     D = tuple(D...)
+#     m, n = size(A)
+#     n2, p = size(B)
+#     @assert n == n2
 
-    C = [Vector{NTuple{k,Int}}() for _ in 1:m, _ in 1:p]
-    for i in 1:m, j in 1:p
-        C[i, j] = [x for x in unique!(vcat([[[x .+ y for x in A[i, k], y in B[k, j]]...] for k in 1:n]...))
-                   if all(x .<= D)]
-    end
-    return C
-end
+#     C = [Vector{NTuple{k,Int}}() for _ in 1:m, _ in 1:p]
+#     for i in 1:m, j in 1:p
+#         C[i, j] = [x for x in unique!(vcat([[[x .+ y for x in A[i, k], y in B[k, j]]...] for k in 1:n]...))
+#                    if all(x .<= D)]
+#     end
+#     return C
+# end
 
-function linedistance_matrix(nwt::NWT, D::Vector{Int})
-    tm = totalmatrix(nwt)
-    k = length(tm)
-    N = size(tm[1], 1)
+# function linedistance_matrix(nwt::NWT, D::Vector{Int})
+#     tm = totalmatrix(nwt)
+#     k = length(tm)
+#     N = size(tm[1], 1)
 
-    A = [Vector{NTuple{k,Int}}() for _ in 1:N, _ in 1:N]
-    for i in 1:k
-        for (j, v) in enumerate(tm[i])
-            if v
-                push!(A[j], tuple(I[1:k, i]...))
-            end
-        end
-    end
+#     A = [Vector{NTuple{k,Int}}() for _ in 1:N, _ in 1:N]
+#     for i in 1:k
+#         for (j, v) in enumerate(tm[i])
+#             if v
+#                 push!(A[j], tuple(I[1:k, i]...))
+#             end
+#         end
+#     end
 
-    B = deepcopy(A)
-    powers = [Vector{NTuple{k,Int}}([tuple([0 for _ in 1:k]...); A[i, j]]) for i in 1:N, j in 1:N]
-    for _ in 1:sum(D)
-        B = linedistance_matmul(A, B, D)
-        powers = unique!.(vcat.(powers, B))
-    end
+#     B = deepcopy(A)
+#     powers = [Vector{NTuple{k,Int}}([tuple([0 for _ in 1:k]...); A[i, j]]) for i in 1:N, j in 1:N]
+#     for _ in 1:sum(D)
+#         B = linedistance_matmul(A, B, D)
+#         powers = unique!.(vcat.(powers, B))
+#     end
 
-    for v in powers
-        for (a, b) in distinct_pairs(v)
-            c = a .+ b
-            if all(c .<= D .&& (D .- c) .% 2 .== 0)
-                @goto ld_next
-            end
-        end
-        return false
-        @label ld_next
-    end
+#     for v in powers
+#         for (a, b) in distinct_pairs(v)
+#             c = a .+ b
+#             if all(c .<= D .&& (D .- c) .% 2 .== 0)
+#                 @goto ld_next
+#             end
+#         end
+#         return false
+#         @label ld_next
+#     end
 
-    return true
-end
+#     return true
+# end
 
 # Generate all NWT with specified cc, n and no trees
 # function allW(cc::CellComplex, n::Vector{Int})::Vector{NWT}
@@ -591,61 +591,93 @@ function add_line(incc::CellComplex, fp::Vector{Int})::Vector{NWT}
     return result
 end
 
-function face_graph(cc::CellComplex, D::Vector{Int})::Tuple{Vector{NTuple{cc.k + 1,Int}},Matrix{Int}}
-    @assert(length(D) == cc.k)
-    faceV = product1d(eachindex(cc.F), [0:d for d in D]...)
-    faceE = zeros(Int, length(faceV), length(faceV))
+# function face_graph(cc::CellComplex, D::Vector{Int})::Tuple{Vector{NTuple{cc.k + 1,Int}},Matrix{Int}}
+#     @assert(length(D) == cc.k)
+#     faceV = product1d(eachindex(cc.F), [0:d for d in D]...)
+#     faceE = zeros(Int, length(faceV), length(faceV))
 
-    efs = [[] for _ in cc.E]
-    for (f, F) in enumerate(cc.F)
-        for (s, e) in F
-            push!(efs[e], f)
-        end
-    end
-    @assert(all(length.(efs) .== 2))
+#     efs = [[] for _ in cc.E]
+#     for (f, F) in enumerate(cc.F)
+#         for (s, e) in F
+#             push!(efs[e], f)
+#         end
+#     end
+#     @assert(all(length.(efs) .== 2))
 
-    for (e, (s, d, i)) in enumerate(cc.E)
-        start_t = tuple([0 for d in D]...)
-        delta_t = tuple(I[1:cc.k, i]...)
-        end_t = tuple([d for d in D]...) .- delta_t
+#     for (e, (s, d, i)) in enumerate(cc.E)
+#         start_t = tuple([0 for d in D]...)
+#         delta_t = tuple(I[1:cc.k, i]...)
+#         end_t = tuple([d for d in D]...) .- delta_t
 
-        (f1, f2) = efs[e]
+#         (f1, f2) = efs[e]
 
-        for t in product1d((start_t[i]:end_t[i] for i in 1:cc.k)...)
-            if1 = findfirst(==(tuple(f1, t...)), faceV)
-            if2 = findfirst(==(tuple(f2, (t .+ delta_t)...)), faceV)
-            faceE[if1, if2] = 1
+#         for t in product1d((start_t[i]:end_t[i] for i in 1:cc.k)...)
+#             if1 = findfirst(==(tuple(f1, t...)), faceV)
+#             if2 = findfirst(==(tuple(f2, (t .+ delta_t)...)), faceV)
+#             faceE[if1, if2] = 1
 
-            if1 = findfirst(==(tuple(f2, t...)), faceV)
-            if2 = findfirst(==(tuple(f1, (t .+ delta_t)...)), faceV)
-            faceE[if1, if2] = 1
-        end
-    end
+#             if1 = findfirst(==(tuple(f2, t...)), faceV)
+#             if2 = findfirst(==(tuple(f1, (t .+ delta_t)...)), faceV)
+#             faceE[if1, if2] = 1
+#         end
+#     end
 
-    return faceV, faceE
+#     return faceV, faceE
+# end
+
+@inline function liftedindex(N, D, n, d)
+    acc = [1; accumulate(*, D .+ 1)[1:end-1]]
+    return n + N * sum(d .* acc)
 end
 
-function is_bezout_order_zero(cc::CellComplex, D::Vector{Int})
-    dps = distinct_pairs(eachindex(cc.F))
+function liftedgraph(tm::Vector{BitMatrix}, D)
+    k = length(tm)
+    N = size(tm[1], 1)
 
-    faceV, faceE = face_graph(cc, D)
-    faceG = SimpleDiGraph(faceE)
-    fws = floyd_warshall_shortest_paths(faceG)
+    lv = product1d(1:N, [0:d for d in D]...)
+    le = zeros(Bool, length(lv), length(lv))
+
+    for i in 1:k
+        for r1 in 1:N, r2 in r1:N
+            if tm[i][r1, r2]
+                start_t = tuple([0 for d in D]...)
+                delta_t = tuple(I[1:k, i]...)
+                end_t = tuple([d for d in D]...) .- delta_t
+
+                for t in product1d((start_t[i]:end_t[i] for i in 1:k)...)
+                    le[liftedindex(N, D, r1, t), liftedindex(N, D, r2, t .+ delta_t)] = 1
+                    le[liftedindex(N, D, r2, t), liftedindex(N, D, r1, t .+ delta_t)] = 1
+                end
+            end
+        end
+    end
+
+    return lv, le
+end
+
+function is_bezout_order_zero(nwt::NWT, D::Vector{Int})
+    tm = totalmatrix(nwt)
+    N = size(tm[1], 1)
+    dps = distinct_pairs(axes(tm, 1))
+
+    lv, le = liftedgraph(tm, D)
+    lg = SimpleDiGraph(le)
+    fws = floyd_warshall_shortest_paths(lg)
     ep = enumerate_paths(fws)
 
     while !isempty(dps)
         (f1, f2) = first(dps)
-        start_f = findfirst(==(tuple(f1, [0 for d in D]...)), faceV)
-        ends_f = [findfirst(==(tuple(f1, ds...)), faceV) for ds in product1d([collect(d:(-2):0) for d in D]...)]
+        start_f = liftedindex(N, D, f1, [0 for d in D])
+        ends_f = [liftedindex(N, D, f1, ds) for ds in product1d([collect(d:(-2):0) for d in D]...)]
 
-        for middle_f in findall(i -> faceV[i][1] == f2 && fws.dists[start_f, i] < typemax(Int), eachindex(faceV))
+        for middle_f in findall(i -> lv[i][1] == f2 && fws.dists[start_f, i] < typemax(Int), eachindex(lv))
             for end_f in ends_f
                 if fws.dists[middle_f, end_f] < typemax(Int)
                     path1 = ep[start_f][middle_f]
                     path2 = ep[middle_f][end_f]
                     path = [path1[1:end-1]; path2]
 
-                    setdiff!(dps, [(faceV[f1][1], faceV[f2][1]) for (f1, f2) in distinct_pairs(path)])
+                    setdiff!(dps, [(lv[f1][1], lv[f2][1]) for (f1, f2) in distinct_pairs(path)])
 
                     @goto boz_ok
                 end
@@ -660,34 +692,114 @@ function is_bezout_order_zero(cc::CellComplex, D::Vector{Int})
     return true
 end
 
-function is_bezout_order_one(cc::CellComplex, D::Vector{Int})
-    if !is_bezout_order_zero(cc, D)
+# function regiongraph(cc::CellComplex, T::Vector{@NamedTuple{g::Int, T::Vector{Bool}}}, D::Vector{Int})::Tuple{Vector{NTuple{cc.k + 1,Int}},Matrix{Int}}
+#     @assert(length(D) == cc.k)
+#     faceV = product1d(eachindex(cc.F), [0:d for d in D]...)
+#     faceE = zeros(Int, length(faceV), length(faceV))
+
+#     efs = [[] for _ in cc.E]
+#     for (f, F) in enumerate(cc.F)
+#         for (s, e) in F
+#             push!(efs[e], f)
+#         end
+#     end
+#     @assert(all(length.(efs) .== 2))
+
+#     for (e, (s, d, i)) in enumerate(cc.E)
+#         start_t = tuple([0 for d in D]...)
+#         delta_t = tuple(I[1:cc.k, i]...)
+#         end_t = tuple([d for d in D]...) .- delta_t
+
+#         (f1, f2) = efs[e]
+
+#         for t in product1d((start_t[i]:end_t[i] for i in 1:cc.k)...)
+#             if1 = findfirst(==(tuple(f1, t...)), faceV)
+#             if2 = findfirst(==(tuple(f2, (t .+ delta_t)...)), faceV)
+#             faceE[if1, if2] = 1
+
+#             if1 = findfirst(==(tuple(f2, t...)), faceV)
+#             if2 = findfirst(==(tuple(f1, (t .+ delta_t)...)), faceV)
+#             faceE[if1, if2] = 1
+#         end
+#     end
+
+#     return faceV, faceE
+# end
+
+# function is_bezout_order_zero(cc::CellComplex, D::Vector{Int})
+#     dps = distinct_pairs(eachindex(cc.F))
+
+#     faceV, faceE = face_graph(cc, D)
+#     faceG = SimpleDiGraph(faceE)
+#     fws = floyd_warshall_shortest_paths(faceG)
+#     ep = enumerate_paths(fws)
+
+#     while !isempty(dps)
+#         (f1, f2) = first(dps)
+#         start_f = findfirst(==(tuple(f1, [0 for d in D]...)), faceV)
+#         ends_f = [findfirst(==(tuple(f1, ds...)), faceV) for ds in product1d([collect(d:(-2):0) for d in D]...)]
+
+#         for middle_f in findall(i -> faceV[i][1] == f2 && fws.dists[start_f, i] < typemax(Int), eachindex(faceV))
+#             for end_f in ends_f
+#                 if fws.dists[middle_f, end_f] < typemax(Int)
+#                     path1 = ep[start_f][middle_f]
+#                     path2 = ep[middle_f][end_f]
+#                     path = [path1[1:end-1]; path2]
+
+#                     setdiff!(dps, [(faceV[f1][1], faceV[f2][1]) for (f1, f2) in distinct_pairs(path)])
+
+#                     @goto boz_ok
+#                 end
+#             end
+#         end
+
+#         return false
+
+#         @label boz_ok
+#     end
+
+#     return true
+# end
+
+function emptyNWT(cc::CellComplex)::NWT
+    return NWT(cc, [0 for _ in eachindex(cc.E)], [[] for _ in eachindex(cc.F)], [])
+end
+
+function is_bezout_order_n(cc::CellComplex, D::Vector{Int}, n::Int)
+    if n == 0
+        return is_bezout_order_zero(emptyNWT(cc), D)
+    end
+
+    if !is_bezout_order_n(cc, D, n - 1)
         return false
     end
-    dps = distinct_pairs(eachindex(cc.F))
 
-    faceV, faceE = face_graph(cc, D)
-    faceG = SimpleDiGraph(faceE)
-    ds = [dijkstra_shortest_paths(faceG, findfirst(==(tuple(f, [0 for d in D]...)), faceV), allpaths=true) for f in eachindex(cc.F)]
+    tm = totalmatrix(nwt)
+    N = size(tm[1], 1)
+    dps = distinct_pairs(axes(tm, 1))
+
+    lv, le = liftedgraph(tm, D)
+    lg = SimpleDiGraph(le)
+    ds = [dijkstra_shortest_paths(lg, liftedindex(N, D, f, [0 for d in D]), allpaths=true) for f in eachindex(cc.F)]
 
     while !isempty(dps)
         (f1, f2) = first(dps)
 
-        start_f = findfirst(==((f1, [0 for d in D]...)), faceV)
-        for middle_f in findall(i -> faceV[i][1] == f2 && ds[f1].dists[i] < typemax(Int), eachindex(faceV))
-            for end_f in [findfirst(==(tuple(f1, ds...)), faceV) for ds in product1d([collect(d:(-2):m) for (d, m) in zip(D, faceV[middle_f][2:end])]...)]
-                end2_t = faceV[end_f][2:end] .- faceV[middle_f][2:end]
-                end2_f = findfirst(==(tuple(f1, end2_t...)), faceV)
+        start_f = liftedindex(N, D, f1, [0 for d in D])
+        for middle_f in findall(i -> lv[i][1] == f2 && ds[f1].dists[i] < typemax(Int), eachindex(lv))
+            for end_f in [liftedindex(N, D, f1, ds) for ds in product1d([collect(d:(-2):m) for (d, m) in zip(D, lv[middle_f][2:end])]...)]
+                end2_t = lv[end_f][2:end] .- lv[middle_f][2:end]
+                end2_f = liftedindex(N, D, f1, end2_t)
                 if ds[f2].dists[end2_f] < typemax(Int)
-                    start2_f = findfirst(==((f2, [0 for d in D]...)), faceV)
+                    start2_f = liftedindex(N, D, f2, [0 for d in D])
                     paths1 = all_shortest_paths(start_f, middle_f, ds[f1].predecessors)
                     paths2 = all_shortest_paths(start2_f, end2_f, ds[f2].predecessors)
-                    paths = [first.(faceV[[path1[1:end-1]; path2]]) for (path1, path2) in Iterators.product(paths1, paths2)]
+                    paths = [first.(lv[[path1[1:end-1]; path2]]) for (path1, path2) in Iterators.product(paths1, paths2)]
 
                     for path in paths
                         for refined_nwt in add_line(cc, path)
-                            if is_bezout_order_zero(groundcc(refined_nwt), [D...; 1])
-                                setdiff!(dps, [(faceV[f1][1], faceV[f2][1]) for (f1, f2) in distinct_pairs(path)])
+                            if is_bezout_order_zero(refined_nwt, [D; 1])
+                                setdiff!(dps, [(lv[f1][1], lv[f2][1]) for (f1, f2) in distinct_pairs(path)])
                                 @goto boo_ok
                             end
                         end
@@ -703,6 +815,50 @@ function is_bezout_order_one(cc::CellComplex, D::Vector{Int})
 
     return true
 end
+
+# function is_bezout_order_one(cc::CellComplex, D::Vector{Int})
+#     if !is_bezout_order_zero(cc, D)
+#         return false
+#     end
+#     dps = distinct_pairs(eachindex(cc.F))
+
+#     faceV, faceE = face_graph(cc, D)
+#     faceG = SimpleDiGraph(faceE)
+#     ds = [dijkstra_shortest_paths(faceG, findfirst(==(tuple(f, [0 for d in D]...)), faceV), allpaths=true) for f in eachindex(cc.F)]
+
+#     while !isempty(dps)
+#         (f1, f2) = first(dps)
+
+#         start_f = findfirst(==((f1, [0 for d in D]...)), faceV)
+#         for middle_f in findall(i -> faceV[i][1] == f2 && ds[f1].dists[i] < typemax(Int), eachindex(faceV))
+#             for end_f in [findfirst(==(tuple(f1, ds...)), faceV) for ds in product1d([collect(d:(-2):m) for (d, m) in zip(D, faceV[middle_f][2:end])]...)]
+#                 end2_t = faceV[end_f][2:end] .- faceV[middle_f][2:end]
+#                 end2_f = findfirst(==(tuple(f1, end2_t...)), faceV)
+#                 if ds[f2].dists[end2_f] < typemax(Int)
+#                     start2_f = findfirst(==((f2, [0 for d in D]...)), faceV)
+#                     paths1 = all_shortest_paths(start_f, middle_f, ds[f1].predecessors)
+#                     paths2 = all_shortest_paths(start2_f, end2_f, ds[f2].predecessors)
+#                     paths = [first.(faceV[[path1[1:end-1]; path2]]) for (path1, path2) in Iterators.product(paths1, paths2)]
+
+#                     for path in paths
+#                         for refined_nwt in add_line(cc, path)
+#                             if is_bezout_order_zero(groundcc(refined_nwt), [D...; 1])
+#                                 setdiff!(dps, [(faceV[f1][1], faceV[f2][1]) for (f1, f2) in distinct_pairs(path)])
+#                                 @goto boo_ok
+#                             end
+#                         end
+#                     end
+#                 end
+#             end
+#         end
+
+#         return false
+
+#         @label boo_ok
+#     end
+
+#     return true
+# end
 
 ### TESTS ###
 

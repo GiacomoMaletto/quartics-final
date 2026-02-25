@@ -23,6 +23,7 @@ function dyck_sequence(D::Vector{Bool}, start_label)
 end
 
 function sequence_dyck(seq::AbstractVector{<:Integer})
+    seq = [findfirst(==(n), unique(seq)) for n in seq]
     m = length(seq)
     m >= 1 || throw(ArgumentError("borseq must be nonempty"))
     # borseq[1] == 1 || throw(ArgumentError("first label must be 1"))

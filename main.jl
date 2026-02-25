@@ -1,6 +1,7 @@
 using Test
 using Graphs
 using LinearAlgebra: I
+using JSON3, CodecZlib
 
 include("dyck.jl")
 include("my_graphs.jl")
@@ -41,6 +42,21 @@ end
 
 Base.:(==)(cc1::CellComplex, cc2::CellComplex) = cc1.k == cc2.k && cc1.nV == cc2.nV && cc1.E == cc2.E && cc1.F == cc2.F
 Base.hash(cc::CellComplex) = hash((cc.k, cc.nV, cc.E, cc.F))
+
+function write_cc_to_jsonl!(io, cc)
+    rec = Dict(
+        "k" => cc.k,
+        "nV" => cc.nV,
+        "E" => cc.E,
+        "F" => cc.F)
+    JSON3.write(io, rec)
+    write(io, '\n')
+end
+
+function read_cc_from_jsonl_line(line)
+    rec = JSON3.read(line, CellComplex)
+    return CellComplex(rec.k, rec.nV, rec.E, rec.F)
+end
 
 function source(e)
     return e.s
@@ -101,6 +117,28 @@ Base.hash(nwt::NWT) = hash((nwt.cc, nwt.n, nwt.W, nwt.T))
 
 Base.show(io::IO, nwt::NWT) = print(io, (nwt.n, nwt.W, nwt.T))
 
+struct NWT_from_jsonl
+    n::Vector{UInt8}
+    W::Vector{Vector{Bool}}
+    T::Vector{@NamedTuple{g::UInt8, T::Vector{Bool}}}
+    itriang::Int
+end
+
+function write_nwt_to_jsonl!(io, nwt, itriang)
+    rec = Dict(
+        "n" => UInt8.(nwt.n),
+        "W" => nwt.W,
+        "T" => @NamedTuple{g::UInt8, T::Vector{Bool}}.(nwt.T),
+        "itriang" => itriang)
+    JSON3.write(io, rec)
+    write(io, '\n')
+end
+
+function read_nwt_from_jsonl_line(line, cc)
+    rec = JSON3.read(line, NWT_from_jsonl)
+    return NWT(cc, rec.n, rec.W, rec.T), rec.itriang
+end
+
 function emptyNWT(cc::CellComplex)::NWT
     return NWT(cc, [0 for _ in eachindex(cc.E)], [[] for _ in eachindex(cc.F)], [])
 end
@@ -156,14 +194,17 @@ function groundmatrix(nwt)::Vector{BitMatrix}
             push!(efi[e], (f, i))
         end
     end
-    @assert(all(length.(efi) .== 2))
+
+    @assert(all(length.(efi) .== 1 .|| length.(efi) .== 2))
 
     figs = fi_ground_sequence(nwt)
 
     for e in eachindex(nwt.n)
-        ((f1, i1), (f2, i2)) = efi[e]
-        for (g1, g2) in zip(figs[(f1, i1)], figs[(f2, i2)])
-            setindexsymmetric!(gmat[cc.E[e].i], g1, g2, 1)
+        if length(efi[e]) == 2
+            ((f1, i1), (f2, i2)) = efi[e]
+            for (g1, g2) in zip(figs[(f1, i1)], figs[(f2, i2)])
+                setindexsymmetric!(gmat[cc.E[e].i], g1, g2, 1)
+            end
         end
     end
 
@@ -238,7 +279,7 @@ end
 # input:
 # - in_nwt: the input nwt, where in_cc = in_nwt.cc
 # - out_cc: cc of the output; must have the same vertices, a subset of the edges, and the merged faces
-# - Imap: if an edge has type i in out_cc, it has type Imap in in_cc
+# - Imap: if an edge has type i in out_cc, it has type Imap[i] in in_cc
 # - Emap: edge e in out_cc.E is edge Emap[e] in in_cc.E
 # - Fmap: the i-th border of the face f in out_cc.F is the in_i-th border of the face in_f in in_cc.F, where Fmap[f][i]=(in_f,in_i)
 # output:
@@ -274,16 +315,25 @@ function forget_edges(in_nwt::NWT, out_cc::CellComplex, Imap::Vector{Int}, Emap:
 
     merged_fgs = Vector{Int}[]
     for f in eachindex(out_cc.F)
+        # println("f: ", f)
         push!(merged_fgs, [])
         for ((in_f, in_i), (out_s, out_e)) in zip(Fmap[f], out_cc.F[f])
+            # println("in_f: ", in_f)
+            # println("in_i: ", in_i)
+            # println("out_s: ", out_s)
+            # println("out_e: ", out_e)
             (in_cc.F[in_f][in_i].e == Emap[out_e]) || error("Fmap format not correct.")
+            # println("removed_map: ", removed_map)
+            # println("in_figs: ", in_figs)
             append!(merged_fgs[end], [removed_map[g] for g in reversebool(out_s, in_figs[(in_f, in_i)])])
         end
     end
     merged_fgs = remove_consecutive.(merged_fgs)
+    # println("merged_fgs: ", merged_fgs)
     out_D = sequence_dyck.(merged_fgs)
 
     merged_gs = vcat(merged_fgs...)
+    # println("out_D: ", out_D)
     out_gs = vcat(f_ground_sequence(out_D)...)
     gmap = Dict(zip(out_gs, merged_gs))
 
@@ -682,6 +732,33 @@ function all_bezout_zero(cc::CellComplex, D::Vector{Int})::Vector{NWT}
     end
 
     return result
+end
+
+# function viro(points::Vector{Tuple{Int,Int}}, triangles::Vector{Vector{Int}}, signs::Vector{Int})::NWT
+
+# end
+
+function symmetry_yzx(nwt)
+    return forget_edges(
+        nwt,
+        three_lines,
+        [2, 3, 1],
+        [2, 3, 1, 5, 6, 4],
+        [
+            [(1, 2), (1, 3), (1, 1)], [(3, 2), (3, 3), (3, 1)],
+            [(4, 2), (4, 3), (4, 1)], [(2, 2), (2, 3), (2, 1)]])
+end
+
+function symmetry_yxz(nwt)
+    return generate_symmetry([2, 1, 3, 5, 4, 6], [nwt.n[3], nwt.n[6], nwt.n[6], nwt.n[3]], nwt)
+end
+
+function symmetry_xYZ(nwt)
+    return generate_symmetry([1, 5, 6, 4, 2, 3], [0, 0, 0, 0], nwt)
+end
+
+function symmetry_XyZ(nwt)
+    return generate_symmetry([4, 2, 6, 1, 5, 3], [0, 0, 0, 0], nwt)
 end
 
 ### TESTS ###

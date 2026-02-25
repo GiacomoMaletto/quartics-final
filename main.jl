@@ -122,21 +122,23 @@ struct NWT_from_jsonl
     W::Vector{Vector{Bool}}
     T::Vector{@NamedTuple{g::UInt8, T::Vector{Bool}}}
     itriang::Int
+    sign::Vector{Bool}
 end
 
-function write_nwt_to_jsonl!(io, nwt, itriang)
+function write_nwt_to_jsonl!(io, nwt, itriang, sign)
     rec = Dict(
         "n" => UInt8.(nwt.n),
         "W" => nwt.W,
         "T" => @NamedTuple{g::UInt8, T::Vector{Bool}}.(nwt.T),
-        "itriang" => itriang)
+        "itriang" => itriang,
+        "sign" => sign)
     JSON3.write(io, rec)
     write(io, '\n')
 end
 
 function read_nwt_from_jsonl_line(line, cc)
     rec = JSON3.read(line, NWT_from_jsonl)
-    return NWT(cc, rec.n, rec.W, rec.T), rec.itriang
+    return NWT(cc, rec.n, rec.W, rec.T), rec.itriang, rec.sign
 end
 
 function emptyNWT(cc::CellComplex)::NWT
@@ -279,21 +281,22 @@ end
 # input:
 # - in_nwt: the input nwt, where in_cc = in_nwt.cc
 # - out_cc: cc of the output; must have the same vertices, a subset of the edges, and the merged faces
+# - Vmap: the i-th vertex of out_cc is the Vmap[i]-th vertex of in_cc
 # - Imap: if an edge has type i in out_cc, it has type Imap[i] in in_cc
 # - Emap: edge e in out_cc.E is edge Emap[e] in in_cc.E
 # - Fmap: the i-th border of the face f in out_cc.F is the in_i-th border of the face in_f in in_cc.F, where Fmap[f][i]=(in_f,in_i)
 # output:
 # - out_nwt: obtained by removing some edges from in_nwt
-function forget_edges(in_nwt::NWT, out_cc::CellComplex, Imap::Vector{Int}, Emap::Vector{Int}, Fmap::Vector{Vector{Tuple{Int,Int}}})::NWT
+function forget_edges(in_nwt::NWT, out_cc::CellComplex, Emap::Vector{Int}, Fmap::Vector{Vector{Tuple{Bool,Int,Int}}})::NWT
     in_cc = in_nwt.cc
 
-    (in_cc.nV == out_cc.nV) || error("Not the same number of vertices.")
+    # (in_cc.nV == out_cc.nV == length(Vmap)) || error("Not the same number of vertices.")
 
-    (length(out_cc.E) == length(Emap) == length(unique(Emap))) || error("Not a subset of the edges.")
-    for (e, E) in enumerate(out_cc.E)
-        in_E = in_cc.E[Emap[e]]
-        (E.s == in_E.s && E.d == in_E.d && Imap[E.i] == in_E.i) || error("Edges do not match.")
-    end
+    # (length(out_cc.E) == length(Emap) == length(unique(Emap))) || error("Not a subset of the edges.")
+    # for (e, E) in enumerate(out_cc.E)
+    #     in_E = in_cc.E[Emap[e]]
+    #     (Vmap[E.s] == in_E.s && Vmap[E.d] == in_E.d && Imap[E.i] == in_E.i) || error("Edges do not match.")
+    # end
 
     for (f, F) in enumerate(out_cc.F)
         (length(Fmap[f]) == length(F)) || error("Not enough borders.")
@@ -303,8 +306,8 @@ function forget_edges(in_nwt::NWT, out_cc::CellComplex, Imap::Vector{Int}, Emap:
 
     gmat = groundmatrix(in_nwt)
 
-    removed_i = setdiff(1:in_cc.k, Imap)
-    removed_matrix = reduce((m1, m2) -> m1 .|| m2, gmat[removed_i])
+    removed_i = setdiff(1:in_cc.k, getproperty.(in_cc.E[Emap], :i))
+    removed_matrix = reduce((m1, m2) -> m1 .|| m2, gmat[removed_i]; init=falses(size(gmat[1])))
     removed_components = connected_components(SimpleGraph(removed_matrix))
     removed_map = Dict{Int,Int}()
     for (i, c) in enumerate(removed_components)
@@ -317,7 +320,7 @@ function forget_edges(in_nwt::NWT, out_cc::CellComplex, Imap::Vector{Int}, Emap:
     for f in eachindex(out_cc.F)
         # println("f: ", f)
         push!(merged_fgs, [])
-        for ((in_f, in_i), (out_s, out_e)) in zip(Fmap[f], out_cc.F[f])
+        for ((in_s, in_f, in_i), (out_s, out_e)) in zip(Fmap[f], out_cc.F[f])
             # println("in_f: ", in_f)
             # println("in_i: ", in_i)
             # println("out_s: ", out_s)
@@ -325,7 +328,8 @@ function forget_edges(in_nwt::NWT, out_cc::CellComplex, Imap::Vector{Int}, Emap:
             (in_cc.F[in_f][in_i].e == Emap[out_e]) || error("Fmap format not correct.")
             # println("removed_map: ", removed_map)
             # println("in_figs: ", in_figs)
-            append!(merged_fgs[end], [removed_map[g] for g in reversebool(out_s, in_figs[(in_f, in_i)])])
+            append!(merged_fgs[end], [removed_map[g] for g in reversebool(xor(in_s, out_s), in_figs[(in_f, in_i)])])
+            # println("merged_fgs: ", merged_fgs)
         end
     end
     merged_fgs = remove_consecutive.(merged_fgs)
@@ -333,9 +337,12 @@ function forget_edges(in_nwt::NWT, out_cc::CellComplex, Imap::Vector{Int}, Emap:
     out_D = sequence_dyck.(merged_fgs)
 
     merged_gs = vcat(merged_fgs...)
+    # println("merged_gs: ", merged_gs)
     # println("out_D: ", out_D)
     out_gs = vcat(f_ground_sequence(out_D)...)
+    # println("out_gs: ", out_gs)
     gmap = Dict(zip(out_gs, merged_gs))
+    # println("gmap: ", gmap)
 
     unused_ground = [g for g in 1:size(gmat[1], 1) if !(removed_map[g] in merged_gs)]
 
@@ -346,7 +353,8 @@ function forget_edges(in_nwt::NWT, out_cc::CellComplex, Imap::Vector{Int}, Emap:
         end
     end
     flforest, vmap = my_merge_vertices_list(flforest, removed_components)
-
+    # println("removed_components: ", removed_components)
+    # println("vmap", vmap)
     out_T = []
     for (ng, mg) in gmap
         D = rooted_tree_to_dyck(flforest, vmap[removed_components[mg][1]])
@@ -739,26 +747,56 @@ end
 # end
 
 function symmetry_yzx(nwt)
-    return forget_edges(
-        nwt,
-        three_lines,
-        [2, 3, 1],
-        [2, 3, 1, 5, 6, 4],
-        [
-            [(1, 2), (1, 3), (1, 1)], [(3, 2), (3, 3), (3, 1)],
-            [(4, 2), (4, 3), (4, 1)], [(2, 2), (2, 3), (2, 1)]])
+    return forget_edges(nwt, three_lines, [2, 3, 1, 5, 6, 4],
+        Vector{Tuple{Bool,Int,Int}}[[(0, 1, 2), (0, 1, 3), (0, 1, 1)], [(0, 3, 2), (0, 3, 3), (0, 3, 1)], [(0, 4, 2), (0, 4, 3), (0, 4, 1)], [(0, 2, 2), (0, 2, 3), (0, 2, 1)]])
 end
 
 function symmetry_yxz(nwt)
-    return generate_symmetry([2, 1, 3, 5, 4, 6], [nwt.n[3], nwt.n[6], nwt.n[6], nwt.n[3]], nwt)
+    return forget_edges(nwt, three_lines, [2, 1, 3, 5, 4, 6],
+        Vector{Tuple{Bool,Int,Int}}[[(1, 1, 2), (1, 1, 1), (1, 1, 3)], [(1, 3, 2), (1, 3, 1), (1, 3, 3)], [(1, 2, 2), (1, 2, 1), (1, 2, 3)], [(1, 4, 2), (1, 4, 1), (1, 4, 3)]])
 end
 
 function symmetry_xYZ(nwt)
-    return generate_symmetry([1, 5, 6, 4, 2, 3], [0, 0, 0, 0], nwt)
+    return forget_edges(nwt, three_lines, [1, 5, 6, 4, 2, 3],
+        Vector{Tuple{Bool,Int,Int}}[[(0, 2, 1), (0, 2, 2), (0, 2, 3)], [(0, 1, 1), (0, 1, 2), (0, 1, 3)], [(0, 4, 1), (0, 4, 2), (0, 4, 3)], [(0, 3, 1), (0, 3, 2), (0, 3, 3)]])
 end
 
 function symmetry_XyZ(nwt)
-    return generate_symmetry([4, 2, 6, 1, 5, 3], [0, 0, 0, 0], nwt)
+    return forget_edges(nwt, three_lines, [4, 2, 6, 1, 5, 3],
+        Vector{Tuple{Bool,Int,Int}}[[(0, 3, 1), (0, 3, 2), (0, 3, 3)], [(0, 4, 1), (0, 4, 2), (0, 4, 3)], [(0, 1, 1), (0, 1, 2), (0, 1, 3)], [(0, 2, 1), (0, 2, 2), (0, 2, 3)]])
+end
+
+function symmetries(nwt::NWT)::Vector{NWT}
+    syms = NWT[nwt]
+    syms = [syms; symmetry_yzx.(syms); symmetry_yzx.(symmetry_yzx.(syms))]
+    syms = [syms; symmetry_yxz.(syms)]
+    syms = [syms; symmetry_xYZ.(syms)]
+    syms = [syms; symmetry_XyZ.(syms)]
+    return syms
+end
+
+function strictsymmetries(nwt::NWT)::Vector{NWT}
+    syms = NWT[nwt]
+    syms = [syms; symmetry_xYZ.(syms)]
+    syms = [syms; symmetry_XyZ.(syms)]
+    return syms
+end
+
+function remove_symmetries(nwts::Vector{NWT}, symm_function)::Vector{NWT}
+    dict = Dict{NWT,Bool}()
+    for nwt in nwts
+        dict[nwt] = true
+    end
+
+    for (nwt, v) in dict
+        if v
+            for symm in setdiff(symm_function(nwt), [nwt])
+                dict[symm] = false
+            end
+        end
+    end
+
+    return [nwt for (nwt, v) in dict if v]
 end
 
 ### TESTS ###
@@ -857,11 +895,11 @@ end
         [(1, [1, 0, 1, 0, 1, 0])]
     )
 
-    @test forget_edges(marge, two_lines_three_points, [1, 3], [1, 3, 4, 6], [[(1, 1), (3, 1), (3, 3), (1, 3)], [(2, 1), (4, 1), (4, 3), (2, 3)]]) == marge_e
+    @test forget_edges(marge, two_lines_three_points, [1, 3, 4, 6], Vector{Tuple{Bool,Int,Int}}[[(0, 1, 1), (0, 3, 1), (0, 3, 3), (0, 1, 3)], [(0, 2, 1), (0, 4, 1), (0, 4, 3), (0, 2, 3)]]) == marge_e
     @test forget_vertices(marge_e, two_lines, [2], [[1, 3], [4, 2]]) == marge_ev
-    @test forget_edges(marge_ev, one_line, [2], [2], [[(2, 2), (1, 2)]]) == marge_eve
+    @test forget_edges(marge_ev, one_line, [2], Vector{Tuple{Bool,Int,Int}}[[(0, 2, 2), (0, 1, 2)]]) == marge_eve
 
-    @test forget_edges(fine, two_lines_three_points, [1, 3], [1, 3, 4, 6], [[(1, 1), (3, 1), (3, 3), (1, 3)], [(2, 1), (4, 1), (4, 3), (2, 3)]]) == fine_e
+    @test forget_edges(fine, two_lines_three_points, [1, 3, 4, 6], Vector{Tuple{Bool,Int,Int}}[[(0, 1, 1), (0, 3, 1), (0, 3, 3), (0, 1, 3)], [(0, 2, 1), (0, 4, 1), (0, 4, 3), (0, 2, 3)]]) == fine_e
 end
 
 @testset "nonline" begin

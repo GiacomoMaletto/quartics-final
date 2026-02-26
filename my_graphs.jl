@@ -5,6 +5,21 @@ function my_union(g::SimpleGraph, h::SimpleGraph)
     return SimpleGraph(blockdiag(adjacency_matrix(g), adjacency_matrix(h)))
 end
 
+function my_induced_subgraph(g::SimpleGraph, vlist::Vector{Int})::SimpleGraph
+    A = BitMatrix(adjacency_matrix(g))
+    n = size(A, 1)
+
+    vvec = falses(n)
+    for v in vlist
+        vvec[v] = 1
+    end
+
+    V = vvec * transpose(vvec)
+
+    return SimpleGraph(A .&& V)
+end
+
+
 function my_merge_vertices(g::SimpleGraph, V::Vector{Int}; make_self_loop=true)
     A = adjacency_matrix(g)
     V = sort(unique(V))

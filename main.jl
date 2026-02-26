@@ -2,6 +2,7 @@ using Test
 using Graphs
 using LinearAlgebra: I
 using JSON3, CodecZlib
+using Combinatorics: multiset_combinations
 
 include("dyck.jl")
 include("my_graphs.jl")
@@ -146,10 +147,10 @@ function emptyNWT(cc::CellComplex)::NWT
 end
 
 function f_ground_sequence(Ws::Vector{Vector{Bool}})::Vector{Vector{Int}}
-    i = 1
+    i = 0
     fgs = []
     for W in Ws
-        push!(fgs, dyck_sequence(W, i))
+        push!(fgs, dyck_to_sequence(W) .+ i)
         i += div(length(W), 2) + 1
     end
     return fgs
@@ -219,7 +220,7 @@ function floatingforest(nwt)::SimpleGraph
 
     vss = Vector{Int}[]
     for (g, T) in nwt.T
-        rt, root = dyck_to_rooted_tree(T)
+        rt, root = dyck_to_rtgraph(T)
         push!(vss, [g, nv(graph) + root])
         graph = my_union(graph, rt)
     end
@@ -334,7 +335,7 @@ function forget_edges(in_nwt::NWT, out_cc::CellComplex, Emap::Vector{Int}, Fmap:
     end
     merged_fgs = remove_consecutive.(merged_fgs)
     # println("merged_fgs: ", merged_fgs)
-    out_D = sequence_dyck.(merged_fgs)
+    out_D = sequence_to_dyck.(merged_fgs)
 
     merged_gs = vcat(merged_fgs...)
     # println("merged_gs: ", merged_gs)
@@ -357,7 +358,7 @@ function forget_edges(in_nwt::NWT, out_cc::CellComplex, Emap::Vector{Int}, Fmap:
     # println("vmap", vmap)
     out_T = []
     for (ng, mg) in gmap
-        D = rooted_tree_to_dyck(flforest, vmap[removed_components[mg][1]])
+        D = rtgraph_to_dyck((flforest, vmap[removed_components[mg][1]]))
         if !isempty(D)
             push!(out_T, (g=ng, T=D))
         end
@@ -427,7 +428,7 @@ function groundcc(in_nwt::NWT)::CellComplex
         B[1] = [pop!(B); B[1]]
         @assert(length(B) == length(W))
 
-        mabel = dyck_mabel(W, length(outE) + 1)
+        mabel = dyck_to_mabel(W) .+ length(outE)
         for m in unique(mabel)
             (i, j) = findall(==(m), mabel)
             push!(outE, (outE[B[i][end].e].d, outE[B[j][end].e].d, outk))
@@ -459,7 +460,7 @@ end
 # given a nwt on a projective CellComplex, return the topological type of the curve (b, T)
 # where b==true iff there is a pseudoline, and T is the rooted tree representing the regions of the curve,
 # where the root is the unique region whose interior of the closure is nonorientable
-function curve_type(nwt::NWT)::Tuple{Bool,Vector{Bool}}
+function curve_type(nwt::NWT)::Tuple{Tuple{Bool,Vector{Bool}},Vector{Int}}
     tm = totalmatrix(nwt)
 
     vss = length(tm) > 2 ? connected_components(SimpleGraph(max.(tm[2:end-1]...))) : Vector{Int}[]
@@ -474,10 +475,12 @@ function curve_type(nwt::NWT)::Tuple{Bool,Vector{Bool}}
     if isempty(l_ext)
         (length(c_ext) == 1) || error("There should be a unique self-loop in the odd case")
         rem_edge!(c_g, c_ext[1], c_ext[1])
-        return (true, rooted_tree_to_dyck(c_g, c_ext[1]))
+        w, wmap = rt_to_dyck(sort_rt(rtgraph_to_rt(c_g, c_ext[1])))
+        return (true, w), wmap[c_vmap[lc_vmap[axes(tm[1], 1)]]]
     else
         (length(c_ext) == 0) || error("There should be no self-loops in the even case")
-        return (false, rooted_tree_to_dyck(c_g, only(unique(c_vmap[l_ext]))))
+        w, wmap = rt_to_dyck(sort_rt(rtgraph_to_rt(c_g, only(unique(c_vmap[l_ext])))))
+        return (false, w), wmap[c_vmap[lc_vmap[axes(tm[1], 1)]]]
     end
 end
 
@@ -499,7 +502,7 @@ function add_line(incc::CellComplex, fp::Vector{Int})::Vector{NWT}
             es = vcat([fill(e, n[e]) for (s, e) in F]...)
 
             for W in all_dyck_words(length(p))
-                if p == sort([sort((es[i], es[j])) for (i, j) in dyck_pairs(W)])
+                if p == sort([sort((es[i], es[j])) for (i, j) in dyck_to_pairs(W)])
                     push!(fW[f], W)
                 end
             end
@@ -507,7 +510,7 @@ function add_line(incc::CellComplex, fp::Vector{Int})::Vector{NWT}
 
         for Ws in product1d(fW...)
             nwt = NWT(incc, n, [Ws...], [])
-            if curve_type(nwt) == (true, [])
+            if curve_type(nwt)[1] == (true, [])
                 push!(result, nwt)
             end
         end
@@ -563,59 +566,104 @@ function is_bezout_basic(nwt::NWT, D::Vector{Int})
     return true
 end
 
-function is_bezout_order_zero(nwt::NWT, D::Vector{Int})
-    if !is_bezout_basic(nwt, D)
-        return false
-    end
+# function linedistance_matmul(A::Matrix{Vector{NTuple{k,Int}}}, B::Matrix{Vector{NTuple{k,Int}}}, D::Vector{Int})::Matrix{Vector{NTuple{k,Int}}} where k
+#     m, n = size(A)
+#     n2, p = size(B)
+#     @assert n == n2
 
-    tm = totalmatrix(nwt)
-    N = size(tm[1], 1)
-    dps = distinct_pairs(axes(tm[1], 1))
+#     C = [Vector{NTuple{k,Int}}() for _ in 1:m, _ in 1:p]
+#     for i in 1:m, j in 1:p
+#         C[i, j] = [x for x in unique!(vcat([[[x .+ y for x in A[i, k], y in B[k, j]]...] for k in 1:n]...))
+#                    if all(x .<= D)]
+#     end
+#     return C
+# end
 
-    lv, le = liftedgraph(tm, D)
-    lg = SimpleDiGraph(le)
-    fws = floyd_warshall_shortest_paths(lg)
-    ep = enumerate_paths(fws)
-
-    while !isempty(dps)
-        (f1, f2) = first(dps)
-        start_f = liftedindex(N, D, f1, [0 for d in D])
-        ends_f = [liftedindex(N, D, f1, ds) for ds in product1d([collect(d:(-2):0) for d in D]...)]
-
-        for middle_f in findall(i -> lv[i][1] == f2 && fws.dists[start_f, i] < typemax(Int), eachindex(lv))
-            for end_f in ends_f
-                if fws.dists[middle_f, end_f] < typemax(Int)
-                    path1 = ep[start_f][middle_f]
-                    path2 = ep[middle_f][end_f]
-                    path = [path1[1:end-1]; path2]
-
-                    setdiff!(dps, [(lv[f1][1], lv[f2][1]) for (f1, f2) in distinct_pairs(path)])
-
-                    @goto boz_ok
+@inline function linedistance_matmul(A, B, D, k, m, n, p)
+    C = [NTuple{k,Int}[] for _ in 1:m, _ in 1:p]
+    for i in 1:m, j in 1:p
+        buf = NTuple{k,Int}[]
+        for l in 1:n
+            for x in A[i, l], y in B[l, j]
+                s = x .+ y
+                if all(s .<= D)
+                    push!(buf, s)
                 end
             end
         end
-
-        return false
-
-        @label boz_ok
+        C[i, j] = unique!(buf)
     end
+    return C
+end
 
+@inline function minimal_elements(v)
+    filter(t1 -> !any(t2 -> t2 !== t1 && all(t2 .<= t1), v), v)
+end
+
+@inline function feasible(s, D)
+    for i in eachindex(s)
+        s[i] > D[i] && return false
+        (D[i] - s[i]) % 2 != 0 && return false
+    end
     return true
 end
 
-function is_bezout_order_one(cc::CellComplex, D::Vector{Int})
-    if !is_bezout_order_zero(emptyNWT(cc), D)
+@inline function distinct_pairs_sums(v)
+    [v[i] .+ v[j] for i in eachindex(v) for j in i+1:length(v)]
+end
+
+function linedistance_matrix(nwt::NWT, D::Vector{Int})
+    tm = totalmatrix(nwt)
+    k = length(tm)
+    N = size(tm[1], 1)
+
+    A = [Vector{NTuple{k,Int}}() for _ in 1:N, _ in 1:N]
+    for i in 1:k
+        for (j, v) in enumerate(tm[i])
+            if v
+                push!(A[j], tuple(I[1:k, i]...))
+            end
+        end
+    end
+
+    B = A
+
+    powers = [Set{NTuple{k,Int}}(A[i, j]) for i in 1:N, j in 1:N]
+    for i in 1:N
+        push!(powers[i, i], ntuple(_ -> 0, k))
+    end
+
+    for _ in 1:sum(D)
+        B = linedistance_matmul(A, B, D, k, N, N, N)
+        for i in 1:N, j in 1:N
+            union!(powers[i, j], B[i, j])
+        end
+    end
+
+    return [minimal_elements(filter(s -> feasible(s, D), distinct_pairs_sums(collect(p)))) for p in powers]
+end
+
+function is_bezout_order_zero(nwt::NWT, D::Vector{Int})
+    if !is_bezout_basic(nwt, [D; 0])
         return false
     end
 
-    tm = totalmatrix(nwt)
+    return all([!isempty(v) for v in linedistance_matrix(nwt, D)])
+end
+
+function is_bezout_order_one(nwt::NWT, D::Vector{Int})
+    if !is_bezout_order_zero(nwt, D)
+        return false
+    end
+
+    tm = groundmatrix(nwt)
     N = size(tm[1], 1)
     dps = distinct_pairs(axes(tm[1], 1))
 
     lv, le = liftedgraph(tm, D)
     lg = SimpleDiGraph(le)
-    ds = [dijkstra_shortest_paths(lg, liftedindex(N, D, f, [0 for d in D]), allpaths=true) for f in eachindex(cc.F)]
+    ds = [dijkstra_shortest_paths(lg, liftedindex(N, D, f, [0 for d in D]), allpaths=true) for f in 1:N]
+    gcc = groundcc(nwt)
 
     while !isempty(dps)
         (f1, f2) = first(dps)
@@ -632,7 +680,7 @@ function is_bezout_order_one(cc::CellComplex, D::Vector{Int})
                     paths = [first.(lv[[path1[1:end-1]; path2]]) for (path1, path2) in Iterators.product(paths1, paths2)]
 
                     for path in paths
-                        for refined_nwt in add_line(cc, path)
+                        for refined_nwt in add_line(gcc, path)
                             if is_bezout_order_zero(refined_nwt, [D; 1])
                                 setdiff!(dps, [(lv[f1][1], lv[f2][1]) for (f1, f2) in distinct_pairs(path)])
                                 @goto boo_ok
@@ -695,7 +743,13 @@ function all_n(cc::CellComplex, D::Vector{Int})::Vector{Vector{Int}}
     return result
 end
 
-_d6(i, j) = (false, Bool[vcat([[1, 0] for _ in 1:i]...); 1; vcat([[1, 0] for _ in 1:j]...); 0])
+function _d6(i::Int, j::Int)::Tuple{Bool,Vector{Bool}}
+    if j == 0
+        (false, vcat([[1, 0] for _ in 1:i]...))
+    else
+        (false, [vcat([[1, 0] for _ in 1:i]...); 1; vcat([[1, 0] for _ in 1:j]...); 0])
+    end
+end
 
 curve_type_list = Vector{Tuple{Bool,Vector{Bool}}}[
     [(true, [])],
@@ -711,23 +765,63 @@ curve_type_list = Vector{Tuple{Bool,Vector{Bool}}}[
     ],
     [
         [_d6(o, 0) for o in 0:9]..., # <n>
-        [_d6(i, o - 1 - i) for o in 2:9 for i in 1:(o-1)]..., # <n ⊔ 1<m>>
+        [_d6(i, o - 1 - i) for o in 2:9 for i in 0:(o-2)]..., # <n ⊔ 1<m>>
         _d6(10, 0), _d6(8, 1), _d6(5, 4), _d6(4, 5), _d6(1, 8), _d6(0, 9),
         _d6(9, 1), _d6(5, 5), _d6(1, 9),
         (false, [1, 1, 1, 0, 0, 0]),
     ]
 ]
 
+# Constraint satisfaction problem
+function all_sections(vvs, c)
+    n = length(vvs)
+    results = Vector{Vector{Any}}()
+    domains = [copy(vvs[i]) for i in 1:n]  # mutable working domains
+
+    function backtrack(i, current, domains)
+        if i > n
+            push!(results, copy(current))
+            return
+        end
+        for v in domains[i]
+            # Check consistency with already-chosen elements
+            if all(c(current[j], v) for j in 1:i-1)
+                # Forward checking: prune future domains
+                new_domains = [copy(domains[l]) for l in 1:n]
+                for l in i+1:n
+                    filter!(w -> c(v, w), new_domains[l])
+                end
+                # Only recurse if no domain is empty
+                if all(!isempty(new_domains[l]) for l in i+1:n)
+                    push!(current, v)
+                    backtrack(i + 1, current, new_domains)
+                    pop!(current)
+                end
+            end
+        end
+    end
+
+    backtrack(1, [], domains)
+    return results
+end
+
 function all_bezout_zero(cc::CellComplex, D::Vector{Int})::Vector{NWT}
     result = []
+    i = 0
     for n in all_n(cc, D)
         n_f = [sum([n[e] for (s, e) in F]) for F in cc.F]
         for W in product1d([all_dyck_words(div(n_f[f], 2)) for f in eachindex(cc.F)]...)
             nwt0 = NWT(cc, n, [W...], [])
 
+            # if nwt0.W != [[1, 1, 1, 0, 1, 0, 0, 0], [1, 1, 1, 1, 0, 0, 0, 0]]
+            #     continue
+            # end
+
             @assert(is_bezout_basic(nwt0, D))
 
-            if !(curve_type(nwt0) in curve_type_list[D[end]])
+            ct, ct_vmap = curve_type(nwt0)
+
+            if !(ct in curve_type_list[D[end]])
                 continue
             end
 
@@ -735,7 +829,46 @@ function all_bezout_zero(cc::CellComplex, D::Vector{Int})::Vector{NWT}
                 continue
             end
 
-            push!(result, nwt0)
+            ctregions = [findall(==(v), ct_vmap) for v in unique!(sort(ct_vmap))]
+            ld = [minimum(last.(v)) for v in linedistance_matrix(nwt0, D)]
+
+            # println("ld: ", ld)
+
+            for big in curve_type_list[D[end]]
+                bigg, _ = dyck_to_rtgraph(big[2])
+                compls = rtree_nonisomorphic_embeddings(big[2], ct[2])
+                for compl in compls
+                    cut = difference(bigg, my_induced_subgraph(bigg, compl))
+                    attachments = []
+                    depths = []
+                    diameters = []
+                    for v in compl
+                        depth = rtgraph_depth((cut, v))
+                        if depth > 0
+                            diameter = rtgraph_diameter((cut, v))
+                            push!(attachments, v)
+                            push!(depths, depth)
+                            push!(diameters, diameter)
+                        end
+                    end
+                    # println("attachments: ", attachments)
+                    # println("depths: ", depths)
+                    # println("diameters: ", diameters)
+                    # println("cut: ", collect(edges(cut)))
+                    feasable = []
+                    for (i, v) in enumerate(attachments)
+                        push!(feasable, [(i, r) for r in ctregions[v] if maximum(ld[r, :]) <= D[end] - depth[i] && ld[r, r] <= D[end] - diameters[i]])
+                    end
+                    for section in all_sections(feasable, (((i1, r1), (i2, r2)) -> ld[r1, r2] <= D[end] - depths[i1] - depths[i2]))
+                        T = [(r, rtgraph_to_dyck((cut, attachments[i]))) for (i, r) in section]
+                        push!(result, NWT(cc, n, [W...], sort(T, by=first)))
+                        i += 1
+                        if i % 10000 == 0
+                            println(i)
+                        end
+                    end
+                end
+            end
         end
     end
 

@@ -217,9 +217,9 @@ function all_dyck_words(n::Integer)::Vector{Vector{Bool}}
     return out
 end
 
-function rtgraph_to_rt(g::SimpleGraph, r::Int, p::Int=0)
+function rtgraph_to_rt((g, r)::Tuple{SimpleGraph,Int}, p::Int=0)
     ngbs = setdiff(neighbors(g, r), p)
-    return (r, Any[rtgraph_to_rt(g, n, r) for n in ngbs])
+    return (r, Any[rtgraph_to_rt((g, n), r) for n in ngbs])
 end
 
 function unlabel_rt((v, rt))
@@ -230,27 +230,29 @@ function sort_rt((v, rt))
     return (v, sort(Any[sort_rt(b) for b in rt], by=unlabel_rt))
 end
 
-function rtbranch_to_dyck((v, rt))::Tuple{Vector{Bool},Vector{Int}}
+function rt_branch_to_dyck((v, rt))::Tuple{Vector{Bool},Vector{Int}}
     w = Bool[1]
     vmapinv = Int[v]
-    for (w_br, vmapinv_br) in rtbranch_to_dyck.(rt)
+    for (w_br, vmapinv_br) in rt_branch_to_dyck.(rt)
         append!(w, w_br)
         append!(vmapinv, vmapinv_br)
     end
     return [w; 0], vmapinv
 end
 
-function rt_to_dyck((v, rt))::Tuple{Vector{Bool},Vector{Int}}
+function rt_to_dyck((v, rt))::Tuple{Vector{Bool},Dict{Int,Int}}
     w = Bool[]
     vmapinv = Int[v]
-    for (w_br, vmapinv_br) in rtbranch_to_dyck.(rt)
+    for (w_br, vmapinv_br) in rt_branch_to_dyck.(rt)
         append!(w, w_br)
         append!(vmapinv, vmapinv_br)
     end
-    vmap = similar(vmapinv)
-    for (k, v) in enumerate(vmapinv)
-        vmap[v] = k
-    end
+    # vmap = similar(vmapinv)
+    # println("vmapinv: ", vmapinv)
+    # for (k, v) in enumerate(vmapinv)
+    #     vmap[v] = k
+    # end
+    vmap = Dict(value => key for (key, value) in enumerate(vmapinv))
     return w, vmap
 end
 
@@ -308,6 +310,32 @@ function rtgraph_diameter((g, r)::Tuple{SimpleGraph,Int}, p::Int=0)
         depths = [rtgraph_depth((g, n), r) for n in ngbs]
         return 2 + maximum([depths[i] + depths[j] for i in eachindex(ngbs) for j in (i+1):length(ngbs)])
     end
+end
+
+# function rtgraph_split((g, r)::Tuple{SimpleGraph,Int})::Vector{Tuple{SimpleGraph,Int}}
+
+# end
+
+# claude
+# vectors of size N of nonnegative integers that add up to n
+function compositions(n::Int, N::Int)::Vector{Vector{Int}}
+    results = []
+    current = zeros(Int, N)
+
+    function backtrack(remaining, i)
+        if i == N
+            current[i] = remaining
+            push!(results, copy(current))
+            return
+        end
+        for k in 0:remaining
+            current[i] = k
+            backtrack(remaining - k, i + 1)
+        end
+    end
+
+    backtrack(n, 1)
+    return results
 end
 
 ### TESTS ###

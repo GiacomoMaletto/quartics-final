@@ -2,6 +2,7 @@ using Test
 using Graphs
 using LinearAlgebra: I
 using JSON3, CodecZlib
+using DataStructures: counter
 using Combinatorics: multiset_combinations
 
 include("dyck.jl")
@@ -475,12 +476,12 @@ function curve_type(nwt::NWT)::Tuple{Tuple{Bool,Vector{Bool}},Vector{Int}}
     if isempty(l_ext)
         (length(c_ext) == 1) || error("There should be a unique self-loop in the odd case")
         rem_edge!(c_g, c_ext[1], c_ext[1])
-        w, wmap = rt_to_dyck(sort_rt(rtgraph_to_rt(c_g, c_ext[1])))
-        return (true, w), wmap[c_vmap[lc_vmap[axes(tm[1], 1)]]]
+        w, wmap = rt_to_dyck(sort_rt(rtgraph_to_rt((c_g, c_ext[1]))))
+        return (true, w), [wmap[v] for v in c_vmap[lc_vmap[axes(tm[1], 1)]]]
     else
         (length(c_ext) == 0) || error("There should be no self-loops in the even case")
-        w, wmap = rt_to_dyck(sort_rt(rtgraph_to_rt(c_g, only(unique(c_vmap[l_ext])))))
-        return (false, w), wmap[c_vmap[lc_vmap[axes(tm[1], 1)]]]
+        w, wmap = rt_to_dyck(sort_rt(rtgraph_to_rt((c_g, only(unique(c_vmap[l_ext]))))))
+        return (false, w), [wmap[v] for v in c_vmap[lc_vmap[axes(tm[1], 1)]]]
     end
 end
 
@@ -772,6 +773,7 @@ curve_type_list = Vector{Tuple{Bool,Vector{Bool}}}[
     ]
 ]
 
+# claude
 # Constraint satisfaction problem
 function all_sections(vvs, c)
     n = length(vvs)
@@ -805,9 +807,65 @@ function all_sections(vvs, c)
     return results
 end
 
-function all_bezout_zero(cc::CellComplex, D::Vector{Int})::Vector{NWT}
+function all_nonnested_floating(nwt::NWT, D::Vector{Int})
+    result = NWT[]
+
+    ld = [minimum(last.(v)) for v in linedistance_matrix(nwt, D)]
+    N = size(ld, 1)
+    ct, ct_vmap = curve_type(nwt)
+    d = D[end]
+    maxevenovals = div(d^2 - 3d + 4, 2) - ((d % 2 == 0) ? 0 : 1)
+    maxmissingovals = maxevenovals - (length(unique(ct_vmap)) - 1)
+
+    # ctregions = [findall(==(v), ct_vmap) for v in unique!(sort(ct_vmap))]
+    # externalregion = ctregions[1]
+
+    floating = Int[]
+    for r in 1:N
+        if maximum(ld[r, :]) <= d - 2
+            if ld[r, r] <= d - 4
+                append!(floating, fill(r, maxmissingovals))
+            else
+                push!(floating, r)
+            end
+        end
+    end
+
+    floatingVector = zeros(Int, N)
+    for i in 0:maxmissingovals
+        for c in multiset_combinations(floating, i)
+            for j1 in 1:i
+                for j2 in j1+1:i
+                    if ld[c[j1], c[j2]] > d - 4
+                        @goto skip
+                    end
+                end
+            end
+
+            fill!(floatingVector, 0)
+            for v in c
+                floatingVector[v] += 1
+            end
+
+            T = Tuple{Int,Vector{Bool}}[]
+            for (i, t) in enumerate(floatingVector)
+                if t > 0
+                    push!(T, (i, vcat([[1, 0] for _ in 1:t]...)))
+                end
+            end
+
+            push!(result, NWT(nwt.cc, nwt.n, nwt.W, T))
+
+            @label skip
+        end
+    end
+
+    return result
+end
+
+function all_floatless_bezout_zero(cc::CellComplex, D::Vector{Int})::Vector{NWT}
     result = []
-    i = 0
+    # i = 0
     for n in all_n(cc, D)
         n_f = [sum([n[e] for (s, e) in F]) for F in cc.F]
         for W in product1d([all_dyck_words(div(n_f[f], 2)) for f in eachindex(cc.F)]...)
@@ -829,46 +887,69 @@ function all_bezout_zero(cc::CellComplex, D::Vector{Int})::Vector{NWT}
                 continue
             end
 
-            ctregions = [findall(==(v), ct_vmap) for v in unique!(sort(ct_vmap))]
-            ld = [minimum(last.(v)) for v in linedistance_matrix(nwt0, D)]
+            push!(result, nwt0)
 
-            # println("ld: ", ld)
+            # ctregions = [findall(==(v), ct_vmap) for v in unique!(sort(ct_vmap))]
+            # ld = [minimum(last.(v)) for v in linedistance_matrix(nwt0, D)]
 
-            for big in curve_type_list[D[end]]
-                bigg, _ = dyck_to_rtgraph(big[2])
-                compls = rtree_nonisomorphic_embeddings(big[2], ct[2])
-                for compl in compls
-                    cut = difference(bigg, my_induced_subgraph(bigg, compl))
-                    attachments = []
-                    depths = []
-                    diameters = []
-                    for v in compl
-                        depth = rtgraph_depth((cut, v))
-                        if depth > 0
-                            diameter = rtgraph_diameter((cut, v))
-                            push!(attachments, v)
-                            push!(depths, depth)
-                            push!(diameters, diameter)
-                        end
-                    end
-                    # println("attachments: ", attachments)
-                    # println("depths: ", depths)
-                    # println("diameters: ", diameters)
-                    # println("cut: ", collect(edges(cut)))
-                    feasable = []
-                    for (i, v) in enumerate(attachments)
-                        push!(feasable, [(i, r) for r in ctregions[v] if maximum(ld[r, :]) <= D[end] - depth[i] && ld[r, r] <= D[end] - diameters[i]])
-                    end
-                    for section in all_sections(feasable, (((i1, r1), (i2, r2)) -> ld[r1, r2] <= D[end] - depths[i1] - depths[i2]))
-                        T = [(r, rtgraph_to_dyck((cut, attachments[i]))) for (i, r) in section]
-                        push!(result, NWT(cc, n, [W...], sort(T, by=first)))
-                        i += 1
-                        if i % 10000 == 0
-                            println(i)
-                        end
-                    end
-                end
-            end
+            # # println("ld: ", ld)
+
+            # for big in curve_type_list[D[end]]
+            #     bigg, _ = dyck_to_rtgraph(big[2])
+            #     compls = rtree_nonisomorphic_embeddings(big[2], ct[2])
+            #     for compl in compls
+            #         cut = difference(bigg, my_induced_subgraph(bigg, compl))
+            #         nontrivial = []
+            #         splits = []
+            #         for v in compl
+            #             ngbs = neighbors(cut, v)
+            #             if !isempty(ngbs)
+            #                 push!(nontrivial, v)
+            #                 push!(splits, counter([rt_to_dyck(sort_rt(rtgraph_to_rt((cut, n), v)))[1] for n in neighbors(cut, v)]))
+            #             end
+            #         end
+            #         for split_choice in product1d(splits...)
+
+            #             for (v, split) in zip(compl, split_choice)
+            #                 apps = [combinations(n, length(ctregions[v])) for (tr, n) in split]
+            #                 rtgraphs = [dyck_to_rtgraph(tr) for (tr, n) in split]
+            #                 depth = rtgraph_depth.(rtgraphs)
+            #                 for app_choice in product1d(apps...)
+            #                     # app_depths = 
+            #                 end
+            #             end
+            #         end
+
+            #         # attachments = []
+            #         # depths = []
+            #         # diameters = []
+            #         # for v in compl
+            #         #     depth = rtgraph_depth((cut, v))
+            #         #     if depth > 0
+            #         #         diameter = rtgraph_diameter((cut, v))
+            #         #         push!(attachments, v)
+            #         #         push!(depths, depth)
+            #         #         push!(diameters, diameter)
+            #         #     end
+            #         # end
+            #         # # println("attachments: ", attachments)
+            #         # # println("depths: ", depths)
+            #         # # println("diameters: ", diameters)
+            #         # # println("cut: ", collect(edges(cut)))
+            #         # feasable = []
+            #         # for (i, v) in enumerate(attachments)
+            #         #     push!(feasable, [(i, r) for r in ctregions[v] if maximum(ld[r, :]) <= D[end] - depth[i] && ld[r, r] <= D[end] - diameters[i]])
+            #         # end
+            #         # for section in all_sections(feasable, (((i1, r1), (i2, r2)) -> ld[r1, r2] <= D[end] - depths[i1] - depths[i2]))
+            #         #     T = [(r, rtgraph_to_dyck((cut, attachments[i]))) for (i, r) in section]
+            #         #     push!(result, NWT(cc, n, [W...], sort(T, by=first)))
+            #         #     i += 1
+            #         #     if i % 10000 == 0
+            #         #         println(i)
+            #         #     end
+            #         # end
+            #     end
+            # end
         end
     end
 

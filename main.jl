@@ -8,11 +8,6 @@ using Combinatorics: multiset_combinations
 include("dyck.jl")
 include("my_graphs.jl")
 
-@inline function setindexsymmetric!(S, i, j, v)
-    S[i, j] = v
-    S[j, i] = v
-end
-
 @inline function remove_consecutive(v)
     return [v[1]; v[2:end][v[2:end].!=v[1:end-1]]]
 end
@@ -31,7 +26,7 @@ end
 end
 
 # Combinatorial cellular complex
-# d: vector indicating the degree of each curve (0 if it's just a curve)
+# k: number of curves
 # nV: number of vertices
 # E: vector of tuples (s, d, i) where s is the source, d the destination, i the type of each edge
 # F: vector of vectors of tuples (s, e) where e is the edge and s the sign (1==true: opposite orientation)
@@ -115,7 +110,7 @@ struct NWT
 end
 
 Base.:(==)(nwt1::NWT, nwt2::NWT) = nwt1.cc == nwt2.cc && nwt1.n == nwt2.n && nwt1.W == nwt2.W && nwt1.T == nwt2.T
-Base.hash(nwt::NWT) = hash((nwt.cc, nwt.n, nwt.W, nwt.T))
+Base.hash(nwt::NWT) = hash(([nwt.cc.k, nwt.cc.nV, nwt.cc.E, nwt.cc.F], nwt.n, nwt.W, nwt.T))
 
 Base.show(io::IO, nwt::NWT) = print(io, (nwt.n, nwt.W, nwt.T))
 
@@ -123,7 +118,7 @@ struct NWT_from_jsonl
     n::Vector{UInt8}
     W::Vector{Vector{Bool}}
     T::Vector{@NamedTuple{g::UInt8, T::Vector{Bool}}}
-    itriang::Int
+    itriang::Int32
     sign::Vector{Bool}
 end
 
@@ -188,7 +183,8 @@ function groundmatrix(nwt)::Vector{BitMatrix}
 
     for seq in fgs
         for (g1, g2) in zip(seq[1:end-1], seq[2:end])
-            setindexsymmetric!(gmat[end], g1, g2, 1)
+            gmat[end][g1, g2] = 1
+            gmat[end][g2, g1] = 1
         end
     end
 
@@ -207,7 +203,8 @@ function groundmatrix(nwt)::Vector{BitMatrix}
         if length(efi[e]) == 2
             ((f1, i1), (f2, i2)) = efi[e]
             for (g1, g2) in zip(figs[(f1, i1)], figs[(f2, i2)])
-                setindexsymmetric!(gmat[cc.E[e].i], g1, g2, 1)
+                gmat[cc.E[e].i][g1, g2] = 1
+                gmat[cc.E[e].i][g2, g1] = 1
             end
         end
     end
@@ -292,19 +289,9 @@ end
 function forget_edges(in_nwt::NWT, out_cc::CellComplex, Emap::Vector{Int}, Fmap::Vector{Vector{Tuple{Bool,Int,Int}}})::NWT
     in_cc = in_nwt.cc
 
-    # (in_cc.nV == out_cc.nV == length(Vmap)) || error("Not the same number of vertices.")
-
-    # (length(out_cc.E) == length(Emap) == length(unique(Emap))) || error("Not a subset of the edges.")
-    # for (e, E) in enumerate(out_cc.E)
-    #     in_E = in_cc.E[Emap[e]]
-    #     (Vmap[E.s] == in_E.s && Vmap[E.d] == in_E.d && Imap[E.i] == in_E.i) || error("Edges do not match.")
-    # end
-
     for (f, F) in enumerate(out_cc.F)
         (length(Fmap[f]) == length(F)) || error("Not enough borders.")
     end
-
-    in_figs = fi_ground_sequence(in_nwt)
 
     gmat = groundmatrix(in_nwt)
 
@@ -318,33 +305,22 @@ function forget_edges(in_nwt::NWT, out_cc::CellComplex, Emap::Vector{Int}, Fmap:
         end
     end
 
+    in_figs = fi_ground_sequence(in_nwt)
+
     merged_fgs = Vector{Int}[]
     for f in eachindex(out_cc.F)
-        # println("f: ", f)
         push!(merged_fgs, [])
         for ((in_s, in_f, in_i), (out_s, out_e)) in zip(Fmap[f], out_cc.F[f])
-            # println("in_f: ", in_f)
-            # println("in_i: ", in_i)
-            # println("out_s: ", out_s)
-            # println("out_e: ", out_e)
             (in_cc.F[in_f][in_i].e == Emap[out_e]) || error("Fmap format not correct.")
-            # println("removed_map: ", removed_map)
-            # println("in_figs: ", in_figs)
             append!(merged_fgs[end], [removed_map[g] for g in reversebool(xor(in_s, out_s), in_figs[(in_f, in_i)])])
-            # println("merged_fgs: ", merged_fgs)
         end
     end
     merged_fgs = remove_consecutive.(merged_fgs)
-    # println("merged_fgs: ", merged_fgs)
     out_D = sequence_to_dyck.(merged_fgs)
 
     merged_gs = vcat(merged_fgs...)
-    # println("merged_gs: ", merged_gs)
-    # println("out_D: ", out_D)
     out_gs = vcat(f_ground_sequence(out_D)...)
-    # println("out_gs: ", out_gs)
     gmap = Dict(zip(out_gs, merged_gs))
-    # println("gmap: ", gmap)
 
     unused_ground = [g for g in 1:size(gmat[1], 1) if !(removed_map[g] in merged_gs)]
 
@@ -355,8 +331,7 @@ function forget_edges(in_nwt::NWT, out_cc::CellComplex, Emap::Vector{Int}, Fmap:
         end
     end
     flforest, vmap = my_merge_vertices_list(flforest, removed_components)
-    # println("removed_components: ", removed_components)
-    # println("vmap", vmap)
+
     out_T = []
     for (ng, mg) in gmap
         D = rtgraph_to_dyck((flforest, vmap[removed_components[mg][1]]))
@@ -365,30 +340,19 @@ function forget_edges(in_nwt::NWT, out_cc::CellComplex, Emap::Vector{Int}, Fmap:
         end
     end
 
-    return NWT(out_cc, in_nwt.n[Emap], out_D, out_T)
+    return NWT(out_cc, in_nwt.n[Emap], out_D, sort(out_T, by=first))
 end
 
 # input:
 # - in_nwt: the input nwt, where in_cc = in_nwt.cc
 # - out_cc: cc of the output; must have the a subset of the vertices, the merged edges, and the same faces
-# - Vmap: vertex v in out_cc is vertex Vmap[v] in in_cc
 # - Emap: edge e in out_cc is made by merging edges Emap[e] in in_cc
 # output:
 # - out_nwt: obtained by removing some vertices from in_nwt
-function forget_vertices(in_nwt::NWT, out_cc::CellComplex, Vmap::Vector{Int}, Emap::Vector{Vector{Int}})
-    in_cc = in_nwt.cc
+function forget_vertices(in_nwt::NWT, out_cc::CellComplex, Emap::Vector{Vector{Int}})
+    out_n = [sum(in_nwt.n[Emap[e]]) for e in eachindex(out_cc.E)]
 
-    (length(out_cc.nV) == length(Vmap) == length(unique(Vmap))) || error("Not a subset of the vertices.")
-    for v in setdiff(1:in_cc.nV, Vmap)
-        n = count(==(v), getproperty.(in_cc.E, :s)) + count(==(v), getproperty.(in_cc.E, :d))
-        (n in [0, 2]) || error("Vertex not occurring 0 or 2 times.")
-    end
-
-    (in_cc.k == out_cc.k) || error("Not the same type.")
-
-    out_E = [sum(in_nwt.n[Emap[e]]) for e in eachindex(out_cc.E)]
-
-    return NWT(out_cc, out_E, in_nwt.W, in_nwt.T)
+    return NWT(out_cc, out_n, in_nwt.W, in_nwt.T)
 end
 
 # the ground faces are indexed as in the indexing used in nwt.T
@@ -567,19 +531,6 @@ function is_bezout_basic(nwt::NWT, D::Vector{Int})
     return true
 end
 
-# function linedistance_matmul(A::Matrix{Vector{NTuple{k,Int}}}, B::Matrix{Vector{NTuple{k,Int}}}, D::Vector{Int})::Matrix{Vector{NTuple{k,Int}}} where k
-#     m, n = size(A)
-#     n2, p = size(B)
-#     @assert n == n2
-
-#     C = [Vector{NTuple{k,Int}}() for _ in 1:m, _ in 1:p]
-#     for i in 1:m, j in 1:p
-#         C[i, j] = [x for x in unique!(vcat([[[x .+ y for x in A[i, k], y in B[k, j]]...] for k in 1:n]...))
-#                    if all(x .<= D)]
-#     end
-#     return C
-# end
-
 @inline function linedistance_matmul(A, B, D, k, m, n, p)
     C = [NTuple{k,Int}[] for _ in 1:m, _ in 1:p]
     for i in 1:m, j in 1:p
@@ -753,72 +704,55 @@ function _d6(i::Int, j::Int)::Tuple{Bool,Vector{Bool}}
 end
 
 curve_type_list = Vector{Tuple{Bool,Vector{Bool}}}[
-    [(true, [])],
-    [(false, []), (false, [1, 0])],
-    [(true, []), (true, [1, 0])],
     [
-        (false, []), (false, [1, 0]), (false, [1, 0, 1, 0]), (false, [1, 0, 1, 0, 1, 0]),
-        (false, [1, 0, 1, 0, 1, 0, 1, 0]), (false, [1, 1, 0, 0])
+        (true, [])],
+    [
+        (false, []),
+        (false, [1, 0])],
+    [
+        (true, []),
+        (true, [1, 0])],
+    [
+        (false, []),
+        (false, [1, 0]),
+        (false, [1, 0, 1, 0]),
+        (false, [1, 0, 1, 0, 1, 0]),
+        (false, [1, 0, 1, 0, 1, 0, 1, 0]),
+        (false, [1, 1, 0, 0])
     ],
     [
-        (true, []), (true, [1, 0]), (true, [1, 0, 1, 0]), (true, [1, 1, 0, 0]), (true, [1, 0, 1, 0, 1, 0]),
-        (true, [1, 0, 1, 0, 1, 0, 1, 0]), (true, [1, 0, 1, 0, 1, 0, 1, 0, 1, 0]), (true, [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0])
+        (true, []),
+        (true, [1, 0]),
+        (true, [1, 1, 0, 0]),
+        (true, [1, 0, 1, 0, 1, 0]),
+        (true, [1, 0, 1, 0, 1, 0, 1, 0]),
+        (true, [1, 0, 1, 0, 1, 0, 1, 0, 1, 0]),
+        (true, [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0]),
+        (true, [1, 0, 1, 0])
     ],
     [
-        [_d6(o, 0) for o in 0:9]..., # <n>
+        [_d6(o, 0) for o in 0:10]..., # <n>
         [_d6(i, o - 1 - i) for o in 2:9 for i in 0:(o-2)]..., # <n ⊔ 1<m>>
-        _d6(10, 0), _d6(8, 1), _d6(5, 4), _d6(4, 5), _d6(1, 8), _d6(0, 9),
-        _d6(9, 1), _d6(5, 5), _d6(1, 9),
-        (false, [1, 1, 1, 0, 0, 0]),
-    ]
-]
-
-# claude
-# Constraint satisfaction problem
-function all_sections(vvs, c)
-    n = length(vvs)
-    results = Vector{Vector{Any}}()
-    domains = [copy(vvs[i]) for i in 1:n]  # mutable working domains
-
-    function backtrack(i, current, domains)
-        if i > n
-            push!(results, copy(current))
-            return
-        end
-        for v in domains[i]
-            # Check consistency with already-chosen elements
-            if all(c(current[j], v) for j in 1:i-1)
-                # Forward checking: prune future domains
-                new_domains = [copy(domains[l]) for l in 1:n]
-                for l in i+1:n
-                    filter!(w -> c(v, w), new_domains[l])
-                end
-                # Only recurse if no domain is empty
-                if all(!isempty(new_domains[l]) for l in i+1:n)
-                    push!(current, v)
-                    backtrack(i + 1, current, new_domains)
-                    pop!(current)
-                end
-            end
-        end
-    end
-
-    backtrack(1, [], domains)
-    return results
-end
+        _d6(10, 0),
+        _d6(8, 1),
+        _d6(5, 4),
+        _d6(4, 5),
+        _d6(1, 8),
+        _d6(0, 9),
+        _d6(9, 1),
+        _d6(5, 5),
+        _d6(1, 9),
+        (false, [1, 1, 1, 0, 0, 0])]]
 
 function all_nonnested_floating(nwt::NWT, D::Vector{Int})
     result = NWT[]
 
     ld = [minimum(last.(v)) for v in linedistance_matrix(nwt, D)]
     N = size(ld, 1)
-    ct, ct_vmap = curve_type(nwt)
+    _, ct_vmap = curve_type(nwt)
     d = D[end]
     maxevenovals = div(d^2 - 3d + 4, 2) - ((d % 2 == 0) ? 0 : 1)
     maxmissingovals = maxevenovals - (length(unique(ct_vmap)) - 1)
-
-    # ctregions = [findall(==(v), ct_vmap) for v in unique!(sort(ct_vmap))]
-    # externalregion = ctregions[1]
 
     floating = Int[]
     for r in 1:N
@@ -865,19 +799,15 @@ end
 
 function all_floatless_bezout_zero(cc::CellComplex, D::Vector{Int})::Vector{NWT}
     result = []
-    # i = 0
+
     for n in all_n(cc, D)
         n_f = [sum([n[e] for (s, e) in F]) for F in cc.F]
         for W in product1d([all_dyck_words(div(n_f[f], 2)) for f in eachindex(cc.F)]...)
             nwt0 = NWT(cc, n, [W...], [])
 
-            # if nwt0.W != [[1, 1, 1, 0, 1, 0, 0, 0], [1, 1, 1, 1, 0, 0, 0, 0]]
-            #     continue
-            # end
-
             @assert(is_bezout_basic(nwt0, D))
 
-            ct, ct_vmap = curve_type(nwt0)
+            ct, _ = curve_type(nwt0)
 
             if !(ct in curve_type_list[D[end]])
                 continue
@@ -888,95 +818,127 @@ function all_floatless_bezout_zero(cc::CellComplex, D::Vector{Int})::Vector{NWT}
             end
 
             push!(result, nwt0)
-
-            # ctregions = [findall(==(v), ct_vmap) for v in unique!(sort(ct_vmap))]
-            # ld = [minimum(last.(v)) for v in linedistance_matrix(nwt0, D)]
-
-            # # println("ld: ", ld)
-
-            # for big in curve_type_list[D[end]]
-            #     bigg, _ = dyck_to_rtgraph(big[2])
-            #     compls = rtree_nonisomorphic_embeddings(big[2], ct[2])
-            #     for compl in compls
-            #         cut = difference(bigg, my_induced_subgraph(bigg, compl))
-            #         nontrivial = []
-            #         splits = []
-            #         for v in compl
-            #             ngbs = neighbors(cut, v)
-            #             if !isempty(ngbs)
-            #                 push!(nontrivial, v)
-            #                 push!(splits, counter([rt_to_dyck(sort_rt(rtgraph_to_rt((cut, n), v)))[1] for n in neighbors(cut, v)]))
-            #             end
-            #         end
-            #         for split_choice in product1d(splits...)
-
-            #             for (v, split) in zip(compl, split_choice)
-            #                 apps = [combinations(n, length(ctregions[v])) for (tr, n) in split]
-            #                 rtgraphs = [dyck_to_rtgraph(tr) for (tr, n) in split]
-            #                 depth = rtgraph_depth.(rtgraphs)
-            #                 for app_choice in product1d(apps...)
-            #                     # app_depths = 
-            #                 end
-            #             end
-            #         end
-
-            #         # attachments = []
-            #         # depths = []
-            #         # diameters = []
-            #         # for v in compl
-            #         #     depth = rtgraph_depth((cut, v))
-            #         #     if depth > 0
-            #         #         diameter = rtgraph_diameter((cut, v))
-            #         #         push!(attachments, v)
-            #         #         push!(depths, depth)
-            #         #         push!(diameters, diameter)
-            #         #     end
-            #         # end
-            #         # # println("attachments: ", attachments)
-            #         # # println("depths: ", depths)
-            #         # # println("diameters: ", diameters)
-            #         # # println("cut: ", collect(edges(cut)))
-            #         # feasable = []
-            #         # for (i, v) in enumerate(attachments)
-            #         #     push!(feasable, [(i, r) for r in ctregions[v] if maximum(ld[r, :]) <= D[end] - depth[i] && ld[r, r] <= D[end] - diameters[i]])
-            #         # end
-            #         # for section in all_sections(feasable, (((i1, r1), (i2, r2)) -> ld[r1, r2] <= D[end] - depths[i1] - depths[i2]))
-            #         #     T = [(r, rtgraph_to_dyck((cut, attachments[i]))) for (i, r) in section]
-            #         #     push!(result, NWT(cc, n, [W...], sort(T, by=first)))
-            #         #     i += 1
-            #         #     if i % 10000 == 0
-            #         #         println(i)
-            #         #     end
-            #         # end
-            #     end
-            # end
         end
     end
 
     return result
 end
 
-# function viro(points::Vector{Tuple{Int,Int}}, triangles::Vector{Vector{Int}}, signs::Vector{Int})::NWT
+function viro_patchworking!(
+    deg::Int,
+    itriang::Int,
+    vertices::Vector{Tuple{Int,Int}},
+    triang::Vector{Tuple{Int,Int,Int}},
+    dict_nwt::Dict{NWT,Tuple{Int,Vector{Bool}}})
 
-# end
+    function viro_edge_type(s, d)
+        S = vertices[s]
+        D = vertices[d]
+        if S[1] == D[1] == 0
+            return 1
+        end
+        if S[2] == D[2] == 0
+            return 2
+        end
+        if S[1] + S[2] == D[1] + D[2] == deg
+            return 3
+        end
+        return 4
+    end
+
+    edges = @NamedTuple{s::Int, d::Int, i::Int}[]
+    faces = Vector{@NamedTuple{s::Bool, e::Int}}[]
+    for tr in triang
+        new_edges = [(tr[1], tr[2]), (tr[2], tr[3]), (tr[3], tr[1])]
+        new_signs = [ne[1] > ne[2] for ne in new_edges]
+        new_indices = []
+        for (ns, ne) in zip(new_signs, new_edges)
+            (s, d) = reversebool(ns, ne)
+            index = findfirst(e -> (e.s, e.d) == (s, d), edges)
+            if isnothing(index)
+                push!(edges, (s, d, viro_edge_type(s, d)))
+                index = length(edges)
+            end
+            push!(new_indices, index)
+        end
+        push!(faces, collect(zip(new_signs, new_indices)))
+    end
+
+    cc = CellComplex(4, length(vertices), edges, faces)
+
+    x_edges = sort([e for (e, E) in enumerate(edges) if E.i == 1], by=(e -> edges[e].s), rev=true)
+    y_edges = sort([e for (e, E) in enumerate(edges) if E.i == 2], by=(e -> edges[e].s))
+    z_edges = sort([e for (e, E) in enumerate(edges) if E.i == 3], by=(e -> edges[e].s))
+    Emap = [x_edges; y_edges; z_edges]
+    Fmap = [vcat([[(false, f, i) for (f, F) in enumerate(faces) for (i, (s, e)) in enumerate(F) if e == be]
+                  for be in Emap]...)]
+
+    one_F = [[(s=(edges[e].i == 1), e=out_e) for (out_e, e) in enumerate(Emap)]]
+    one_cc = CellComplex(3, length(vertices), cc.E[Emap], one_F)
+
+    fixedvertices = [findfirst(v -> v .% 2 == s, vertices) for s in [(0, 0), (1, 0), (0, 1), (1, 1)]]
+    filter!(!isnothing, fixedvertices)
+    fixedvertices = fixedvertices[1:min(3, length(fixedvertices))]
+    unfixedvertices = setdiff(eachindex(vertices), fixedvertices)
+
+    for unfixedsign in Iterators.product([false:true for _ in eachindex(unfixedvertices)]...)
+        sign_xyz = [false for _ in vertices]
+        for (i, s) in zip(unfixedvertices, unfixedsign)
+            sign_xyz[i] = s
+        end
+        sign_xYZ = [xor(s, x % 2 != 0) for ((x, y), s) in zip(vertices, sign_xyz)]
+        sign_XyZ = [xor(s, y % 2 != 0) for ((x, y), s) in zip(vertices, sign_xyz)]
+        sign_XYz = [xor(s, x % 2 != 0) for ((x, y), s) in zip(vertices, sign_XyZ)]
+
+        pr_n = [
+            sum([(sign_xyz[E.s] == sign_xyz[E.d]) ? 0 : 1 for E in edges[x_edges]]),
+            sum([(sign_xyz[E.s] == sign_xyz[E.d]) ? 0 : 1 for E in edges[y_edges]]),
+            sum([(sign_xyz[E.s] == sign_xyz[E.d]) ? 0 : 1 for E in edges[z_edges]]),
+            sum([(sign_XYz[E.s] == sign_XYz[E.d]) ? 0 : 1 for E in edges[x_edges]]),
+            sum([(sign_xYZ[E.s] == sign_xYZ[E.d]) ? 0 : 1 for E in edges[y_edges]]),
+            sum([(sign_XyZ[E.s] == sign_XyZ[E.d]) ? 0 : 1 for E in edges[z_edges]])]
+
+        pr_W = Vector{Bool}[]
+        pr_T = @NamedTuple{g::Int, T::Vector{Bool}}[]
+        nground = 0
+        for sign in [sign_xyz, sign_xYZ, sign_XyZ, sign_XYz]
+            n = Int[(sign[E.s] == sign[E.d]) ? 0 : 1 for E in edges]
+            n_f = [sum([n[e] for (s, e) in F]) for F in cc.F]
+            Ws = product1d([all_dyck_words(div(n_f[f], 2)) for f in eachindex(cc.F)]...)
+            nwt = NWT(cc, n, [only(Ws)...], [])
+
+            one_nwt = forget_edges(nwt, one_cc, Emap, Fmap)
+            push!(pr_W, one_nwt.W[1])
+            append!(pr_T, [(g + nground, T) for (g, T) in one_nwt.T])
+            nground += div(length(pr_W[end]), 2) + 1
+        end
+
+        pr_nwt = NWT(lines_xyz, pr_n, pr_W, pr_T)
+        if !haskey(dict_nwt, pr_nwt)
+            for symm in symmetries(pr_nwt)
+                dict_nwt[symm] = (itriang, sign_xyz)
+            end
+        end
+    end
+end
 
 function symmetry_yzx(nwt)
-    return forget_edges(nwt, three_lines, [2, 3, 1, 5, 6, 4],
+    return forget_edges(nwt, lines_xyz, [2, 3, 1, 5, 6, 4],
         Vector{Tuple{Bool,Int,Int}}[[(0, 1, 2), (0, 1, 3), (0, 1, 1)], [(0, 3, 2), (0, 3, 3), (0, 3, 1)], [(0, 4, 2), (0, 4, 3), (0, 4, 1)], [(0, 2, 2), (0, 2, 3), (0, 2, 1)]])
 end
 
 function symmetry_yxz(nwt)
-    return forget_edges(nwt, three_lines, [2, 1, 3, 5, 4, 6],
+    return forget_edges(nwt, lines_xyz, [2, 1, 3, 5, 4, 6],
         Vector{Tuple{Bool,Int,Int}}[[(1, 1, 2), (1, 1, 1), (1, 1, 3)], [(1, 3, 2), (1, 3, 1), (1, 3, 3)], [(1, 2, 2), (1, 2, 1), (1, 2, 3)], [(1, 4, 2), (1, 4, 1), (1, 4, 3)]])
 end
 
 function symmetry_xYZ(nwt)
-    return forget_edges(nwt, three_lines, [1, 5, 6, 4, 2, 3],
+    return forget_edges(nwt, lines_xyz, [1, 5, 6, 4, 2, 3],
         Vector{Tuple{Bool,Int,Int}}[[(0, 2, 1), (0, 2, 2), (0, 2, 3)], [(0, 1, 1), (0, 1, 2), (0, 1, 3)], [(0, 4, 1), (0, 4, 2), (0, 4, 3)], [(0, 3, 1), (0, 3, 2), (0, 3, 3)]])
 end
 
 function symmetry_XyZ(nwt)
-    return forget_edges(nwt, three_lines, [4, 2, 6, 1, 5, 3],
+    return forget_edges(nwt, lines_xyz, [4, 2, 6, 1, 5, 3],
         Vector{Tuple{Bool,Int,Int}}[[(0, 3, 1), (0, 3, 2), (0, 3, 3)], [(0, 4, 1), (0, 4, 2), (0, 4, 3)], [(0, 1, 1), (0, 1, 2), (0, 1, 3)], [(0, 2, 1), (0, 2, 2), (0, 2, 3)]])
 end
 
@@ -987,6 +949,10 @@ function symmetries(nwt::NWT)::Vector{NWT}
     syms = [syms; symmetry_xYZ.(syms)]
     syms = [syms; symmetry_XyZ.(syms)]
     return syms
+end
+
+function symmetries(nwts::Vector{NWT})::Vector{NWT}
+    return unique!(vcat(symmetries.(nwts)...))
 end
 
 function strictsymmetries(nwt::NWT)::Vector{NWT}
@@ -1013,65 +979,99 @@ function remove_symmetries(nwts::Vector{NWT}, symm_function)::Vector{NWT}
     return [nwt for (nwt, v) in dict if v]
 end
 
+function translate_up(nwt::NWT)::NWT
+    @assert(nwt.cc == lines_xyz)
+
+    nwt_xz = forget_edges(
+        nwt,
+        lines_xz_3points,
+        [1, 3, 4, 6],
+        [
+            [(false, 1, 1), (false, 3, 1), (false, 3, 3), (false, 1, 3)],
+            [(false, 2, 1), (false, 4, 1), (false, 4, 3), (false, 2, 3)]])
+
+    return NWT(
+        lines_xyz,
+        [
+            nwt_xz.n[1] + nwt_xz.n[3],
+            nwt_xz.n[4],
+            nwt_xz.n[2],
+            0,
+            nwt_xz.n[2],
+            nwt_xz.n[4]],
+        [
+            nwt_xz.W[1],
+            nwt_xz.W[2],
+            vcat(fill(true, nwt_xz.n[4]), fill(false, nwt_xz.n[4])),
+            vcat(fill(true, nwt_xz.n[2]), fill(false, nwt_xz.n[2])),
+        ],
+        nwt_xz.T)
+end
+
 ### TESTS ###
 
-three_lines = CellComplex(
+lines_xyz = CellComplex(
     3,
     3,
     [(2, 3, 1), (3, 1, 2), (1, 2, 3), (2, 3, 1), (3, 1, 2), (1, 2, 3)],
     [[(0, 1), (0, 2), (0, 3)], [(0, 1), (0, 5), (0, 6)], [(0, 4), (0, 2), (0, 6)], [(0, 4), (0, 5), (0, 3)]])
 
-two_lines_three_points = CellComplex(
+lines_xz_3points = CellComplex(
     2,
     3,
     [(2, 3, 1), (1, 2, 2), (2, 3, 1), (1, 2, 2)],
     [[(0, 1), (1, 3), (1, 4), (0, 2)], [(0, 1), (1, 3), (1, 2), (0, 4)]])
 
-two_lines = CellComplex(
+lines_xz = CellComplex(
     2,
     1,
     [(1, 1, 1), (1, 1, 2)],
     [[(0, 1), (0, 2)], [(0, 1), (1, 2)]]
 )
 
-one_line = CellComplex(
+lines_yz_3points = CellComplex(
+    2,
+    3,
+    [(3, 1, 1), (1, 2, 2), (3, 1, 1), (1, 2, 2)],
+    [[(1, 1), (0, 3), (0, 4), (1, 2)], [(1, 1), (0, 3), (0, 2), (1, 4)]])
+
+lines_yz = CellComplex(
+    2,
+    1,
+    [(1, 1, 1), (1, 1, 2)],
+    [[(0, 1), (0, 2)], [(0, 1), (1, 2)]]
+)
+
+line_z_point_010 = CellComplex(
     1,
     1,
     [(1, 1, 1)],
     [[(0, 1), (0, 1)]]
 )
 
-zero_lines = CellComplex(
-    0,
-    0,
-    [],
-    [[]]
-)
-
 fine = NWT(
-    three_lines,
+    lines_xyz,
     [4, 1, 3, 0, 1, 1],
     [[1, 1, 0, 0, 1, 0, 1, 0], [1, 0, 1, 1, 0, 0], [1, 0], [1, 1, 0, 0]],
     [(1, [1, 0, 1, 0]), (10, [1, 0])])
 
 nonviro = NWT(
-    three_lines,
+    lines_xyz,
     [3, 4, 1, 1, 0, 3],
     [[1, 0, 1, 0, 1, 1, 0, 0], [1, 1, 0, 0, 1, 0], [1, 1, 0, 0, 1, 1, 0, 0], [1, 0]],
     [])
 
 marge = NWT(
-    three_lines,
+    lines_xyz,
     [4, 7, 3, 2, 1, 3],
     [[1, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 0], [1, 1, 1, 0, 1, 0, 0, 0], [1, 1, 0, 1, 1, 1, 0, 0, 1, 0, 0, 0], [1, 0, 1, 1, 0, 0]],
     [(1, [1, 0]), (5, [1, 0]), (17, [1, 0]), (18, [1, 0])]
 )
 
 @testset "CellComplex" begin
-    @test iscellcomplex(three_lines)
-    @test iscellcomplex(two_lines)
-    @test iscellcomplex(one_line)
-    @test iscellcomplex(zero_lines)
+    @test iscellcomplex(lines_xyz)
+    @test iscellcomplex(lines_xz)
+    @test iscellcomplex(line_z_point_010)
 end
 
 @testset "isNWT" begin
@@ -1082,38 +1082,38 @@ end
 
 @testset "remove_edges" begin
     marge_e = NWT(
-        two_lines_three_points,
+        lines_xz_3points,
         [4, 3, 2, 3],
         [[1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 0], [1, 1, 1, 0, 1, 0, 1, 1, 0, 0, 0, 0]],
         [(1, [1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 0, 0])]
     )
 
     marge_ev = NWT(
-        two_lines,
+        lines_xz,
         [6, 6],
         [[1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 0], [1, 1, 1, 0, 1, 0, 1, 1, 0, 0, 0, 0]],
         [(1, [1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 0, 0])]
     )
 
     marge_eve = NWT(
-        one_line,
+        line_z_point_010,
         [6],
         [[1, 0, 1, 1, 0, 0, 1, 0, 1, 0, 1, 0]],
         [(1, [1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 0, 0])]
     )
 
     fine_e = NWT(
-        two_lines_three_points,
+        lines_xz_3points,
         [4, 3, 0, 1],
         [[1, 1, 0, 0, 1, 0, 1, 0], [1, 0, 1, 1, 0, 1, 0, 0]],
         [(1, [1, 0, 1, 0, 1, 0])]
     )
 
-    @test forget_edges(marge, two_lines_three_points, [1, 3, 4, 6], Vector{Tuple{Bool,Int,Int}}[[(0, 1, 1), (0, 3, 1), (0, 3, 3), (0, 1, 3)], [(0, 2, 1), (0, 4, 1), (0, 4, 3), (0, 2, 3)]]) == marge_e
-    @test forget_vertices(marge_e, two_lines, [2], [[1, 3], [4, 2]]) == marge_ev
-    @test forget_edges(marge_ev, one_line, [2], Vector{Tuple{Bool,Int,Int}}[[(0, 2, 2), (0, 1, 2)]]) == marge_eve
+    @test forget_edges(marge, lines_xz_3points, [1, 3, 4, 6], Vector{Tuple{Bool,Int,Int}}[[(0, 1, 1), (0, 3, 1), (0, 3, 3), (0, 1, 3)], [(0, 2, 1), (0, 4, 1), (0, 4, 3), (0, 2, 3)]]) == marge_e
+    @test forget_vertices(marge_e, lines_xz, [[1, 3], [4, 2]]) == marge_ev
+    @test forget_edges(marge_ev, line_z_point_010, [2], Vector{Tuple{Bool,Int,Int}}[[(0, 2, 2), (0, 1, 2)]]) == marge_eve
 
-    @test forget_edges(fine, two_lines_three_points, [1, 3, 4, 6], Vector{Tuple{Bool,Int,Int}}[[(0, 1, 1), (0, 3, 1), (0, 3, 3), (0, 1, 3)], [(0, 2, 1), (0, 4, 1), (0, 4, 3), (0, 2, 3)]]) == fine_e
+    @test forget_edges(fine, lines_xz_3points, [1, 3, 4, 6], Vector{Tuple{Bool,Int,Int}}[[(0, 1, 1), (0, 3, 1), (0, 3, 3), (0, 1, 3)], [(0, 2, 1), (0, 4, 1), (0, 4, 3), (0, 2, 3)]]) == fine_e
 end
 
 @testset "nonline" begin
